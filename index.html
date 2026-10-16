@@ -10,12 +10,13 @@
   <div class="container">
     <header>
       <h1>运费大师</h1>
-      <p>美国 / 欧洲 海运运费快速计算器</p>
+      <p>美国 / 欧洲 海运运费快速计算器（支持一票多箱）</p>
     </header>
 
     <nav class="tabs">
       <div class="tab active" data-tab="calc">运费计算</div>
       <div class="tab" data-tab="data">价格管理</div>
+      <div class="tab" data-tab="rules">计费与附加费规则</div>
     </nav>
 
     <main class="content">
@@ -38,32 +39,55 @@
           </div>
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="length">长 (cm)</label>
-            <input type="number" id="length" placeholder="长" min="0" step="0.1">
-          </div>
-          <div class="form-group">
-            <label for="width">宽 (cm)</label>
-            <input type="number" id="width" placeholder="宽" min="0" step="0.1">
-          </div>
-          <div class="form-group">
-            <label for="height">高 (cm)</label>
-            <input type="number" id="height" placeholder="高" min="0" step="0.1">
-          </div>
-          <div class="form-group">
-            <label for="weight">实重 (kg)</label>
-            <input type="number" id="weight" placeholder="实际重量" min="0" step="0.1">
-          </div>
+        <div class="section-title">箱子信息</div>
+        <div class="table-wrap">
+          <table class="box-table">
+            <thead>
+              <tr>
+                <th style="width:70px">箱号</th>
+                <th>长 (cm)</th>
+                <th>宽 (cm)</th>
+                <th>高 (cm)</th>
+                <th>实重 (kg)</th>
+                <th style="width:100px">操作</th>
+              </tr>
+            </thead>
+            <tbody id="boxes-body"></tbody>
+          </table>
         </div>
+        <div class="hint">可添加多个箱子，每箱单独计算计费重与附加费，最后自动汇总。</div>
 
         <div class="actions">
+          <button id="btn-add-box" class="btn btn-primary">+ 添加箱子</button>
+          <button id="btn-clear-boxes" class="btn btn-danger">清空箱子</button>
           <button id="btn-calc" class="btn btn-primary">开始计算</button>
         </div>
 
         <div id="result" class="result-card" style="display:none;">
           <h3>计算结果</h3>
           <div class="result-grid" id="result-grid"></div>
+
+          <div class="section-title">每箱明细</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>箱号</th>
+                  <th>箱规 (cm)</th>
+                  <th>围长 (cm)</th>
+                  <th>体积 (cm³)</th>
+                  <th>实重 (kg)</th>
+                  <th>计费重 (kg)</th>
+                  <th>单价 (元/kg)</th>
+                  <th>基础运费</th>
+                  <th>附加费</th>
+                  <th>小计</th>
+                </tr>
+              </thead>
+              <tbody id="box-detail-body"></tbody>
+            </table>
+          </div>
+
           <div id="surcharge-detail" class="surcharge-detail" style="display:none;"></div>
         </div>
       </section>
@@ -106,6 +130,86 @@
         <div class="actions">
           <button id="btn-save-all" class="btn btn-primary">保存全部修改</button>
           <button id="btn-reset" class="btn btn-danger">恢复默认数据</button>
+        </div>
+      </section>
+
+      <section id="panel-rules" class="panel">
+        <div class="section-title">通用计费参数</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="vol-divisor">体积重系数</label>
+            <input id="vol-divisor" type="number" step="1" min="1">
+            <div class="hint">计费重 = 长 × 宽 × 高 ÷ 系数，向上取整</div>
+          </div>
+        </div>
+
+        <div class="section-title">美国附加费</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>项目</th>
+                <th>条件 1</th>
+                <th>条件 2</th>
+                <th>条件 3</th>
+                <th>附加费 (元)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>超大件<span class="hint">满足任一条件即收取，且不再叠加下列项目</span></td>
+                <td>围长 &gt; <input id="us-oversize-girth" type="number" step="1"></td>
+                <td>体积 ≥ <input id="us-oversize-volume" type="number" step="1"></td>
+                <td>实重 &gt; <input id="us-oversize-weight" type="number" step="0.1"></td>
+                <td><input id="us-oversize-fee" type="number" step="1"></td>
+              </tr>
+              <tr>
+                <td>实重超重<span class="hint">可与其他项叠加</span></td>
+                <td>实重 &gt; <input id="us-weight-threshold" type="number" step="0.1"></td>
+                <td>—</td>
+                <td>—</td>
+                <td><input id="us-weight-fee" type="number" step="1"></td>
+              </tr>
+              <tr>
+                <td>围长超限<span class="hint">可与其他项叠加</span></td>
+                <td>围长 &gt; <input id="us-girth-threshold" type="number" step="1"></td>
+                <td>—</td>
+                <td>—</td>
+                <td><input id="us-girth-fee" type="number" step="1"></td>
+              </tr>
+              <tr>
+                <td>单边超限<span class="hint">可与其他项叠加</span></td>
+                <td>最长边 &gt; <input id="us-side-long" type="number" step="1"></td>
+                <td>次长边 &gt; <input id="us-side-second" type="number" step="1"></td>
+                <td>—</td>
+                <td><input id="us-side-fee" type="number" step="1"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="actions">
+          <button id="btn-save-settings" class="btn btn-primary">保存计费参数与美国附加费</button>
+        </div>
+
+        <div class="section-title">欧洲附加费</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>条件类型</th>
+                <th>阈值</th>
+                <th>附加费 (元)</th>
+                <th>启用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="eu-rule-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="btn-add-eu-rule" class="btn btn-primary">+ 新增规则</button>
+          <span class="hint">欧洲附加费不叠加：命中多条时取金额最高的一条；取消“启用”可临时停用某条规则。</span>
         </div>
       </section>
     </main>

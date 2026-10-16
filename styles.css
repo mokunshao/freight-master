@@ -295,3 +295,43 @@ td input {
 .toast.show {
   opacity: 1;
 }
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #e53935;
+  font-size: 14px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn-link:hover:not(:disabled) {
+  background: #ffebee;
+}
+
+.btn-link:disabled {
+  color: #bbb;
+  cursor: not-allowed;
+}
+
+td select {
+  padding: 6px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.box-table td input {
+  width: 110px;
+}
+
+td .hint {
+  display: block;
+}
