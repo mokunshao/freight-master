@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>运费大师</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>运费大师</h1>
+      <p>美国 / 欧洲 海运运费快速计算器</p>
+    </header>
+
+    <nav class="tabs">
+      <div class="tab active" data-tab="calc">运费计算</div>
+      <div class="tab" data-tab="data">价格管理</div>
+    </nav>
+
+    <main class="content">
+      <section id="panel-calc" class="panel active">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="region">目的地类型</label>
+            <select id="region">
+              <option value="us">美国</option>
+              <option value="eu">欧洲</option>
+            </select>
+          </div>
+          <div class="form-group" id="zip-group">
+            <label for="zip">美国邮编</label>
+            <input type="text" id="zip" placeholder="例如：33195">
+          </div>
+          <div class="form-group" id="country-group" style="display:none;">
+            <label for="country">欧洲国家</label>
+            <select id="country"></select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="length">长 (cm)</label>
+            <input type="number" id="length" placeholder="长" min="0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label for="width">宽 (cm)</label>
+            <input type="number" id="width" placeholder="宽" min="0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label for="height">高 (cm)</label>
+            <input type="number" id="height" placeholder="高" min="0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label for="weight">实重 (kg)</label>
+            <input type="number" id="weight" placeholder="实际重量" min="0" step="0.1">
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-calc" class="btn btn-primary">开始计算</button>
+        </div>
+
+        <div id="result" class="result-card" style="display:none;">
+          <h3>计算结果</h3>
+          <div class="result-grid" id="result-grid"></div>
+          <div id="surcharge-detail" class="surcharge-detail" style="display:none;"></div>
+        </div>
+      </section>
+
+      <section id="panel-data" class="panel">
+        <div class="section-title">美国价格表（按邮编分区）</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>区域</th>
+                <th>邮编开头</th>
+                <th>10KG+</th>
+                <th>21KG+</th>
+                <th>71KG+</th>
+                <th>101KG+</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="us-table-body"></tbody>
+          </table>
+        </div>
+
+        <div class="section-title">欧洲价格表（按国家）</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>国家/地区</th>
+                <th>10KG+</th>
+                <th>21KG+</th>
+                <th>101KG+</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="eu-table-body"></tbody>
+          </table>
+        </div>
+
+        <div class="actions">
+          <button id="btn-save-all" class="btn btn-primary">保存全部修改</button>
+          <button id="btn-reset" class="btn btn-danger">恢复默认数据</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

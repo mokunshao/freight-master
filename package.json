@@ -1,0 +1,20 @@
+{
+  "name": "freight-master",
+  "version": "1.0.0",
+  "description": "运费大师 - 美国/欧洲海运运费计算器",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "node scripts/pack.mjs",
+    "build": "node scripts/pack.mjs"
+  },
+  "author": "Freight Master",
+  "license": "MIT",
+  "dependencies": {
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^33.0.0"
+  }
+}
