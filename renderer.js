@@ -38,6 +38,7 @@ const btnCalc = document.getElementById('btn-calc');
 const resultCard = document.getElementById('result');
 const resultGrid = document.getElementById('result-grid');
 const boxDetailBody = document.getElementById('box-detail-body');
+const boxDetailFoot = document.getElementById('box-detail-foot');
 const surchargeDetail = document.getElementById('surcharge-detail');
 
 const volDivisorInput = document.getElementById('vol-divisor');
@@ -204,7 +205,7 @@ function renderResult(result) {
       <div class="value">${s.boxCount} 箱</div>
     </div>
     <div class="result-item">
-      <div class="label">起重</div>
+      <div class="label">起重（报价表第一栏）</div>
       <div class="value">${result.minWeight} kg</div>
     </div>
     <div class="result-item">
@@ -212,15 +213,27 @@ function renderResult(result) {
       <div class="value">${s.totalActualWeight} kg</div>
     </div>
     <div class="result-item">
-      <div class="label">合计计费重</div>
+      <div class="label">合计体积重</div>
+      <div class="value">${s.totalVolWeight} kg</div>
+    </div>
+    <div class="result-item highlight">
+      <div class="label">整票计费重</div>
       <div class="value">${s.totalChargedWeight} kg</div>
+    </div>
+    <div class="result-item">
+      <div class="label">适用阶梯</div>
+      <div class="value">${s.tierLabel}</div>
+    </div>
+    <div class="result-item">
+      <div class="label">单价</div>
+      <div class="value">${formatMoney(s.unitPrice)} / kg</div>
     </div>
     <div class="result-item">
       <div class="label">合计体积</div>
       <div class="value">${s.totalVolume} cm³</div>
     </div>
     <div class="result-item">
-      <div class="label">基础运费合计</div>
+      <div class="label">基础运费</div>
       <div class="value">${formatMoney(s.totalBaseFreight)}</div>
     </div>
     <div class="result-item">
@@ -243,16 +256,19 @@ function renderResult(result) {
         <td>${b.volume}</td>
         <td>${b.actualWeight}</td>
         <td>${b.volWeight}</td>
-        <td>${b.chargedWeight}</td>
-        <td>${b.tierLabel}</td>
-        <td>${formatMoney(b.unitPrice)}</td>
-        <td>${formatMoney(b.baseFreight)}</td>
         <td>${formatMoney(b.surcharge)}</td>
-        <td><strong>${formatMoney(b.total)}</strong></td>
       </tr>
     `
     )
     .join('');
+
+  boxDetailFoot.innerHTML = `
+    <tr>
+      <td colspan="7" class="hint">
+        基础运费按整票合并计算：合计计费重 ${s.totalChargedWeight} kg（${s.tierLabel}，${formatMoney(s.unitPrice)}/kg）= ${formatMoney(s.totalBaseFreight)}；附加费按箱判定，合计 ${formatMoney(s.totalSurcharge)}。
+      </td>
+    </tr>
+  `;
 
   const details = result.boxes.filter(b => b.surchargeDetail && b.surchargeDetail.length);
   if (details.length) {

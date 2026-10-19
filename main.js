@@ -619,16 +619,23 @@ function calculateGroup(groupKey, selection, rawBoxes) {
   const values = getRateValues(groupKey).filter(v => v.row_id === row.id);
 
   const boxes = normalizeBoxes(rawBoxes);
-  const items = boxes.map((box, index) => {
+  const measured = boxes.map(box => {
     const m = measure(box.length, box.width, box.height, volDivisor);
     m.actualWeight = box.weight;
+    // 单件计费重：供「按计费重」的附加费规则（如澳大利亚）判定
+    m.chargedWeight = Math.max(minWeight, m.volWeight);
+    return { box, m };
+  });
 
-    const chargedWeight = Math.max(minWeight, m.volWeight);
-    const tier = pickTier(tiers, chargedWeight);
-    const value = values.find(v => v.tier_id === tier.id);
-    const unitPrice = value ? value.price : 0;
-    const baseFreight = chargedWeight * unitPrice;
-    m.chargedWeight = chargedWeight;
+  // 基础运费整票合并：计费重 = max(起重, 各箱体积重之和)，只用这一个数查阶梯与单价
+  const totalVolWeight = measured.reduce((acc, item) => acc + item.m.volWeight, 0);
+  const totalChargedWeight = Math.max(minWeight, totalVolWeight);
+  const tier = pickTier(tiers, totalChargedWeight);
+  const value = values.find(v => v.tier_id === tier.id);
+  const unitPrice = value ? value.price : 0;
+  const baseFreight = round2(totalChargedWeight * unitPrice);
+
+  const items = measured.map(({ box, m }, index) => {
     const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, rules, mode);
     if (rejected) {
       throw new Error(
@@ -643,30 +650,33 @@ function calculateGroup(groupKey, selection, rawBoxes) {
       volume: m.volume,
       actualWeight: box.weight,
       volWeight: m.volWeight,
-      chargedWeight,
-      tierLabel: tier.label,
-      unitPrice,
-      baseFreight: round2(baseFreight),
+      chargedWeight: m.chargedWeight,
       surcharge: round2(surcharge),
       surchargeDetail: detail,
-      total: round2(baseFreight + surcharge),
     };
   });
 
-  const sum = key => round2(items.reduce((acc, item) => acc + item[key], 0));
+  const totalSurcharge = round2(items.reduce((acc, item) => acc + item.surcharge, 0));
   return {
     groupName: meta.name,
     destination: row.row_name,
     minWeight,
+    chargedWeight: totalChargedWeight,
+    tierLabel: tier.label,
+    unitPrice,
+    baseFreight,
     boxes: items,
     summary: {
       boxCount: items.length,
-      totalActualWeight: sum('actualWeight'),
-      totalChargedWeight: items.reduce((acc, item) => acc + item.chargedWeight, 0),
-      totalVolume: items.reduce((acc, item) => acc + item.volume, 0),
-      totalBaseFreight: sum('baseFreight'),
-      totalSurcharge: sum('surcharge'),
-      total: sum('total'),
+      totalActualWeight: round2(boxes.reduce((acc, box) => acc + box.weight, 0)),
+      totalVolWeight,
+      totalChargedWeight,
+      totalVolume: measured.reduce((acc, item) => acc + item.m.volume, 0),
+      tierLabel: tier.label,
+      unitPrice,
+      totalBaseFreight: baseFreight,
+      totalSurcharge,
+      total: round2(baseFreight + totalSurcharge),
     },
   };
 }
