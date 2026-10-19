@@ -324,28 +324,31 @@ function calculateUsSurcharge(box, cfg) {
     side_fee: toNum(cfg.side_fee, DEFAULT_US_SURCHARGE.side_fee),
   };
 
+  // 三个条件满足任一即为超大件，此时不再叠加下列项目
   const isOversize =
-    box.girth > c.oversize_girth || box.volume >= c.oversize_volume || box.actualWeight > c.oversize_weight;
+    box.girth >= c.oversize_girth ||
+    box.volume >= c.oversize_volume ||
+    box.actualWeight >= c.oversize_weight;
   if (isOversize) {
     detail.push(
-      `超大件附加费 +${c.oversize_fee} 元（围长>${c.oversize_girth} 或 体积≥${c.oversize_volume} 或 实重>${c.oversize_weight}KG）`
+      `超大件附加费 +${c.oversize_fee} 元（围长≥${c.oversize_girth} 或 体积≥${c.oversize_volume} 或 实重≥${c.oversize_weight}KG）`
     );
     return { surcharge: c.oversize_fee, detail };
   }
 
   let surcharge = 0;
-  if (box.actualWeight > c.weight_threshold) {
+  if (box.actualWeight >= c.weight_threshold) {
     surcharge += c.weight_fee;
-    detail.push(`实重超${c.weight_threshold}KG +${c.weight_fee} 元`);
+    detail.push(`实重≥${c.weight_threshold}KG +${c.weight_fee} 元`);
   }
-  if (box.girth > c.girth_threshold) {
+  if (box.girth >= c.girth_threshold) {
     surcharge += c.girth_fee;
-    detail.push(`围长超${c.girth_threshold} +${c.girth_fee} 元`);
+    detail.push(`围长≥${c.girth_threshold} +${c.girth_fee} 元`);
   }
-  if (box.longest > c.side_long_threshold || box.secondLongest > c.side_second_threshold) {
+  if (box.longest >= c.side_long_threshold || box.secondLongest >= c.side_second_threshold) {
     surcharge += c.side_fee;
     detail.push(
-      `最长边超${c.side_long_threshold}CM 或 次长边超${c.side_second_threshold}CM +${c.side_fee} 元`
+      `最长边≥${c.side_long_threshold}CM 或 次长边≥${c.side_second_threshold}CM +${c.side_fee} 元`
     );
   }
   return { surcharge, detail };
