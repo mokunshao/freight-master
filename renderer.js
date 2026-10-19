@@ -4,10 +4,19 @@ const MAX_BOXES = 10;
 
 const FIELD_LABELS = {
   weight: '实重 (KG)',
+  charged_weight: '计费重 (KG)',
   girth: '围长 (CM)',
   longest: '最长边 (CM)',
   second_longest: '次长边 (CM)',
+  shortest: '最短边 (CM)',
   volume: '体积 (CM³)',
+};
+
+const KIND_LABELS = {
+  fee: '附加费（可叠加）',
+  oversize: '附加费（超大件，命中不叠加）',
+  reject: '达到即不收货',
+  notice: '仅提醒（不收费）',
 };
 
 let config = { volDivisor: 6000, groups: [] };
@@ -42,7 +51,7 @@ const toast = document.getElementById('toast');
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2500);
+  setTimeout(() => toast.classList.remove('show'), 4000);
 }
 
 function formatMoney(n) {
@@ -339,7 +348,7 @@ function rateTableHtml(group) {
             .map(
               row => `
             <tr data-row="${row.id}">
-              <td><input type="text" data-field="name" value="${row.row_name}"></td>
+              <td><textarea data-field="name" rows="2">${row.row_name}</textarea></td>
               ${isZip ? `<td><input type="text" data-field="matchKey" value="${row.match_key || ''}"></td>` : ''}
               ${group.tiers
                 .map(
@@ -369,11 +378,12 @@ function ruleTableHtml(group) {
       <table>
         <thead>
           <tr>
-            <th style="width:130px">规则组</th>
+            <th style="width:140px">规则组</th>
             <th style="width:150px">条件字段</th>
-            <th style="width:120px">阈值（≥）</th>
-            <th style="width:120px">附加费（元）</th>
-            <th style="width:130px">超大件</th>
+            <th style="width:110px">下限（≥）</th>
+            <th style="width:110px">上限（&lt;）</th>
+            <th style="width:110px">金额（元）</th>
+            <th style="width:200px">类型</th>
             <th style="width:70px">启用</th>
             <th style="width:90px">操作</th>
           </tr>
@@ -395,8 +405,20 @@ function ruleTableHtml(group) {
                 </select>
               </td>
               <td><input type="number" step="0.1" data-field="threshold" value="${rule.threshold}"></td>
+              <td><input type="number" step="0.1" data-field="threshold_max" placeholder="不限" value="${
+                rule.threshold_max === null || rule.threshold_max === undefined ? '' : rule.threshold_max
+              }"></td>
               <td><input type="number" step="1" data-field="amount" value="${rule.amount}"></td>
-              <td><input type="checkbox" data-field="exclusive" ${Number(rule.exclusive) === 1 ? 'checked' : ''}></td>
+              <td>
+                <select data-field="kind">
+                  ${Object.keys(KIND_LABELS)
+                    .map(
+                      k =>
+                        `<option value="${k}" ${(rule.kind || 'fee') === k ? 'selected' : ''}>${KIND_LABELS[k]}</option>`
+                    )
+                    .join('')}
+                </select>
+              </td>
               <td><input type="checkbox" data-field="enabled" ${Number(rule.enabled) === 1 ? 'checked' : ''}></td>
               <td><button class="btn btn-danger btn-sm btn-delete-rule">删除</button></td>
             </tr>
@@ -406,14 +428,14 @@ function ruleTableHtml(group) {
           ${
             group.rules.length
               ? ''
-              : '<tr><td colspan="7" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
+              : '<tr><td colspan="8" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
           }
         </tbody>
       </table>
     </div>
     <div class="actions">
       <button class="btn btn-primary btn-sm btn-add-rule">+ 新增规则</button>
-      <span class="hint">同一规则组内满足任一条件只收一次（取组内最高金额）；不同规则组按下方模式处理。</span>
+      <span class="hint">条件 = 下限（≥）到上限（&lt;）的区间，上限留空表示不限；同一规则组内满足任一条件只收一次；不同规则组按下方模式处理。</span>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -468,8 +490,9 @@ function handleDataInput(e) {
   if (ruleTr) {
     const rule = group.rules[Number(ruleTr.dataset.rule)];
     if (!rule) return;
-    if (field === 'exclusive' || field === 'enabled') rule[field] = e.target.checked ? 1 : 0;
+    if (field === 'enabled') rule[field] = e.target.checked ? 1 : 0;
     else if (field === 'threshold' || field === 'amount') rule[field] = Number(e.target.value);
+    else if (field === 'threshold_max') rule[field] = e.target.value === '' ? null : Number(e.target.value);
     else rule[field] = e.target.value;
     return;
   }
@@ -506,8 +529,13 @@ function collectGroup(group) {
       rule_group: rule.rule_group,
       field: rule.field,
       threshold: Number(rule.threshold),
+      threshold_max:
+        rule.threshold_max === null || rule.threshold_max === undefined || rule.threshold_max === ''
+          ? null
+          : Number(rule.threshold_max),
       amount: Number(rule.amount),
-      exclusive: Number(rule.exclusive) === 1 ? 1 : 0,
+      kind: rule.kind || 'fee',
+      exclusive: rule.kind === 'oversize' ? 1 : 0,
       enabled: Number(rule.enabled) === 1 ? 1 : 0,
     })),
   };
@@ -535,8 +563,9 @@ groupPanels.addEventListener('click', async e => {
         rule_group: '新规则',
         field: 'girth',
         threshold: 0,
+        threshold_max: null,
         amount: 0,
-        exclusive: 0,
+        kind: 'fee',
         enabled: 1,
       });
       renderGroupPanel();

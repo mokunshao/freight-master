@@ -12,10 +12,20 @@ const DEFAULT_VOL_DIVISOR = 6000;
 // 附加费可判断的字段
 const FIELD_LABELS = {
   weight: '实重 (KG)',
+  charged_weight: '计费重 (KG)',
   girth: '围长 (CM)',
   longest: '最长边 (CM)',
   second_longest: '次长边 (CM)',
+  shortest: '最短边 (CM)',
   volume: '体积 (CM³)',
+};
+
+// 规则类型
+const KIND_LABELS = {
+  fee: '附加费（可叠加）',
+  oversize: '附加费（超大件，命中后不叠加其他附加费）',
+  reject: '达到即不收货',
+  notice: '仅提醒（不收费）',
 };
 
 // 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
@@ -64,9 +74,45 @@ const DEFAULT_DATA = {
     ],
   },
   // 以下三个目的地暂无官方报价，单价先置 0 占位，请在「价格管理」里填写
-  ca: { tiers: [10, 21, 101], rows: [{ name: '加拿大 Canada', prices: [0, 0, 0] }], rules: [] },
-  uk: { tiers: [10, 21, 101], rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }], rules: [] },
-  au: { tiers: [10, 21, 101], rows: [{ name: '澳大利亚 Australia', prices: [0, 0, 0] }], rules: [] },
+  ca: {
+    tiers: [10, 21, 101],
+    rows: [{ name: '加拿大 Canada', prices: [0, 0, 0] }],
+    rules: [
+      { rule_group: '①实重', field: 'weight', threshold: 22, amount: 130 },
+      { rule_group: '②单边', field: 'longest', threshold: 121, amount: 130 },
+      { rule_group: '②单边', field: 'second_longest', threshold: 75, amount: 130 },
+      { rule_group: '③围长', field: 'girth', threshold: 265, amount: 130 },
+      { rule_group: '④超大件', field: 'girth', threshold: 320, amount: 700, kind: 'oversize' },
+      { rule_group: '④超大件', field: 'weight', threshold: 40, amount: 700, kind: 'oversize' },
+      { rule_group: '⑤不收货', field: 'weight', threshold: 68, amount: 0, kind: 'reject' },
+      { rule_group: '⑤不收货', field: 'longest', threshold: 151, amount: 0, kind: 'reject' },
+      { rule_group: '⑤不收货', field: 'girth', threshold: 400, amount: 0, kind: 'reject' },
+    ],
+  },
+  uk: {
+    tiers: [10, 21, 101],
+    rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }],
+    rules: [
+      { rule_group: '①实重30-40', field: 'weight', threshold: 30, threshold_max: 40, amount: 330 },
+      // ②和③互不叠加 → 放同一规则组（组内满足任一条件只收一次）
+      { rule_group: '②③尺寸', field: 'longest', threshold: 100, threshold_max: 150, amount: 300 },
+      { rule_group: '②③尺寸', field: 'second_longest', threshold: 70, threshold_max: 100, amount: 300 },
+      { rule_group: '②③尺寸', field: 'shortest', threshold: 60, threshold_max: 100, amount: 300 },
+      { rule_group: '②③尺寸', field: 'girth', threshold: 300, threshold_max: 400, amount: 300 },
+    ],
+  },
+  au: {
+    tiers: [10, 21, 101],
+    rows: [{ name: '澳大利亚 Australia', prices: [0, 0, 0] }],
+    rules: [
+      { rule_group: '计费重≥30', field: 'charged_weight', threshold: 30, threshold_max: 35, amount: 100 },
+      { rule_group: '计费重≥35', field: 'charged_weight', threshold: 35, threshold_max: 80, amount: 300 },
+      { rule_group: '计费重≥80', field: 'charged_weight', threshold: 80, amount: 300 },
+      { rule_group: '单边120-199', field: 'longest', threshold: 120, threshold_max: 200, amount: 100 },
+      { rule_group: '单边200-299', field: 'longest', threshold: 200, threshold_max: 300, amount: 200 },
+      { rule_group: '木托盘提醒', field: 'weight', threshold: 30, amount: 0, kind: 'notice' },
+    ],
+  },
 };
 
 let db = null;
@@ -124,13 +170,26 @@ function initDb() {
     ensureTiers(); // 先把报价阶梯补齐，旧数据才有地方落位
     migrateLegacy(); // 把旧版 us_rates / eu_rates / 附加费配置搬到通用表
     ensureGroupData(); // 补齐缺少的地区行与附加费规则
+    ensureSurchargeDefaults(); // 给加/英/澳写入官方附加费规则（仅首次升级时）
     saveDb();
   } else {
     db = new SQL.Database();
     ensureSchema();
     seedData();
+    ensureSurchargeDefaults();
     saveDb();
   }
+}
+
+// 加拿大/英国/澳大利亚的附加费规则：老库升级时一次性写入（用户后来自己改过的以 rules_v2 标记为准，不再覆盖）
+function ensureSurchargeDefaults() {
+  ['ca', 'uk', 'au'].forEach(key => {
+    if (getSetting('rules_v2_' + key, null) !== null) return;
+    if (getRules(key).length === 0) {
+      DEFAULT_DATA[key].rules.forEach(rule => insertRule(key, rule));
+    }
+    setSetting('rules_v2_' + key, '1');
+  });
 }
 
 function ensureSchema() {
@@ -168,10 +227,22 @@ function ensureSchema() {
       rule_group TEXT NOT NULL,
       field TEXT NOT NULL,
       threshold REAL NOT NULL,
+      threshold_max REAL,
       amount REAL NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'fee',
       exclusive INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 1
     );`);
+  } else {
+    // 旧版表升级：补上限列与规则类型列
+    const cols = db.exec('PRAGMA table_info(surcharge_rules)')[0].values.map(v => v[1]);
+    if (!cols.includes('threshold_max')) {
+      db.run(`ALTER TABLE surcharge_rules ADD COLUMN threshold_max REAL`);
+    }
+    if (!cols.includes('kind')) {
+      db.run(`ALTER TABLE surcharge_rules ADD COLUMN kind TEXT NOT NULL DEFAULT 'fee'`);
+      db.run(`UPDATE surcharge_rules SET kind = CASE WHEN exclusive = 1 THEN 'oversize' ELSE 'fee' END`);
+    }
   }
 }
 
@@ -207,16 +278,24 @@ function insertValue(rowId, tierId, price) {
 }
 
 function insertRule(groupKey, rule) {
+  let kind = rule.kind;
+  if (!KIND_LABELS[kind]) kind = Number(rule.exclusive) === 1 ? 'oversize' : 'fee';
+  const thresholdMax =
+    rule.threshold_max === '' || rule.threshold_max === null || rule.threshold_max === undefined
+      ? null
+      : toNum(rule.threshold_max, null);
   db.run(
-    `INSERT INTO surcharge_rules (group_key, rule_group, field, threshold, amount, exclusive, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO surcharge_rules (group_key, rule_group, field, threshold, threshold_max, amount, kind, exclusive, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       groupKey,
       rule.rule_group || '规则',
       FIELD_LABELS[rule.field] ? rule.field : 'weight',
       toNum(rule.threshold, 0),
+      thresholdMax,
       toNum(rule.amount, 0),
-      Number(rule.exclusive) === 1 ? 1 : 0,
+      kind,
+      kind === 'oversize' ? 1 : 0,
       rule.enabled === undefined ? 1 : Number(rule.enabled) === 1 ? 1 : 0,
     ]
   );
@@ -394,6 +473,7 @@ function measure(length, width, height, volDivisor) {
     girth: (sides[0] + sides[1]) * 2 + sides[2],
     longest: sides[2],
     secondLongest: sides[1],
+    shortest: sides[0],
     volWeight: Math.ceil(volume / volDivisor),
   };
 }
@@ -408,52 +488,96 @@ function pickTier(tiers, chargedWeight) {
   return chosen;
 }
 
+// 规则匹配：下限（≥）+ 可选上限（<）
+function ruleMatches(rule, fields) {
+  const value = fields[rule.field];
+  if (value === undefined || value === null) return false;
+  if (!(value >= toNum(rule.threshold, 0))) return false;
+  const max = rule.threshold_max;
+  if (max !== null && max !== undefined && max !== '' && !(value < Number(max))) return false;
+  return true;
+}
+
+function formatRange(rule) {
+  const max = rule.threshold_max;
+  return max !== null && max !== undefined && max !== '' ? `≥${rule.threshold} 且 <${max}` : `≥${rule.threshold}`;
+}
+
 // 规则组内满足任一条件只收一次（取组内最高金额）；规则组之间按模式叠加或取最高
 function calculateSurcharge(m, rules, mode) {
   const fields = {
     weight: m.actualWeight,
+    charged_weight: m.chargedWeight,
     girth: m.girth,
     longest: m.longest,
     second_longest: m.secondLongest,
+    shortest: m.shortest,
     volume: m.volume,
   };
 
-  const matched = {};
-  rules
-    .filter(r => Number(r.enabled) === 1)
+  const enabled = rules.filter(r => Number(r.enabled) === 1);
+
+  // 达到即不收货
+  const rejected = enabled.find(r => (r.kind || 'fee') === 'reject' && ruleMatches(r, fields));
+  if (rejected) {
+    return {
+      rejected: true,
+      rejectReason: `${rejected.rule_group}：${FIELD_LABELS[rejected.field] || rejected.field} ${formatRange(rejected)}，当前值 ${fields[rejected.field]}`,
+      surcharge: 0,
+      detail: [],
+    };
+  }
+
+  const detail = [];
+
+  // 仅提醒（不收费）
+  enabled
+    .filter(r => r.kind === 'notice' && ruleMatches(r, fields))
     .forEach(r => {
-      const value = fields[r.field];
-      if (value === undefined || !(value >= toNum(r.threshold, 0))) return;
+      detail.push(`提醒：${r.rule_group}（${FIELD_LABELS[r.field] || r.field} ${formatRange(r)}，当前值 ${fields[r.field]}）`);
+    });
+
+  const matched = {};
+  enabled
+    .filter(r => {
+      const kind = r.kind || 'fee';
+      return kind === 'fee' || kind === 'oversize';
+    })
+    .forEach(r => {
+      if (!ruleMatches(r, fields)) return;
       const amount = toNum(r.amount, 0);
       const current = matched[r.rule_group];
       if (!current || amount > current.amount) {
         matched[r.rule_group] = {
           amount,
-          exclusive: Number(r.exclusive) === 1,
-          detail: `${r.rule_group}：${FIELD_LABELS[r.field] || r.field} ≥ ${r.threshold} → +${amount} 元`,
+          exclusive: r.kind === 'oversize',
+          detail: `${r.rule_group}：${FIELD_LABELS[r.field] || r.field} ${formatRange(r)} → +${amount} 元`,
         };
       }
     });
 
   const groups = Object.values(matched);
-  if (!groups.length) return { surcharge: 0, detail: [] };
+  if (groups.length) {
+    if (mode === 'max') {
+      const best = groups.reduce((a, b) => (b.amount > a.amount ? b : a));
+      return { rejected: false, surcharge: best.amount, detail: [...detail, best.detail] };
+    }
 
-  if (mode === 'max') {
-    const best = groups.reduce((a, b) => (b.amount > a.amount ? b : a));
-    return { surcharge: best.amount, detail: [best.detail] };
+    const exclusive = groups.filter(g => g.exclusive);
+    if (exclusive.length) {
+      // 命中超大件：只收超大件，其他附加费不再叠加
+      const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
+      return { rejected: false, surcharge: best.amount, detail: [...detail, best.detail] };
+    }
+
+    return {
+      rejected: false,
+      surcharge: groups.reduce((sum, g) => sum + g.amount, 0),
+      detail: [...detail, ...groups.map(g => g.detail)],
+    };
   }
 
-  const exclusive = groups.filter(g => g.exclusive);
-  if (exclusive.length) {
-    // 命中超大件：只收超大件，前面 1/2/3 项不再叠加
-    const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
-    return { surcharge: best.amount, detail: [best.detail] };
-  }
-
-  return {
-    surcharge: groups.reduce((sum, g) => sum + g.amount, 0),
-    detail: groups.map(g => g.detail),
-  };
+  return { rejected: false, surcharge: 0, detail };
 }
 
 function normalizeBoxes(boxes) {
@@ -504,7 +628,13 @@ function calculateGroup(groupKey, selection, rawBoxes) {
     const value = values.find(v => v.tier_id === tier.id);
     const unitPrice = value ? value.price : 0;
     const baseFreight = chargedWeight * unitPrice;
-    const { surcharge, detail } = calculateSurcharge(m, rules, mode);
+    m.chargedWeight = chargedWeight;
+    const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, rules, mode);
+    if (rejected) {
+      throw new Error(
+        `第 ${index + 1} 箱超出「${meta.name}」承运范围，不收货 —— ${rejectReason}。请调整该箱或联系货代确认。`
+      );
+    }
 
     return {
       index: index + 1,
