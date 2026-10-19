@@ -1,16 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('freightApi', {
-  getUsRates: () => ipcRenderer.invoke('get-us-rates'),
-  getEuRates: () => ipcRenderer.invoke('get-eu-rates'),
-  calculateUs: data => ipcRenderer.invoke('calculate-us', data),
-  calculateEu: data => ipcRenderer.invoke('calculate-eu', data),
-  updateUsRate: data => ipcRenderer.invoke('update-us-rate', data),
-  updateEuRate: data => ipcRenderer.invoke('update-eu-rate', data),
-  getSettings: () => ipcRenderer.invoke('get-settings'),
-  updateSettings: data => ipcRenderer.invoke('update-settings', data),
-  addEuRule: () => ipcRenderer.invoke('add-eu-rule'),
-  updateEuRule: data => ipcRenderer.invoke('update-eu-rule', data),
-  deleteEuRule: data => ipcRenderer.invoke('delete-eu-rule', data),
+  getConfig: () => ipcRenderer.invoke('get-config'),
+  calculate: data => ipcRenderer.invoke('calculate', data),
+  saveGroup: data => ipcRenderer.invoke('save-group', data),
+  addRateRow: data => ipcRenderer.invoke('add-rate-row', data),
+  deleteRateRow: data => ipcRenderer.invoke('delete-rate-row', data),
+  setVolDivisor: value => ipcRenderer.invoke('set-vol-divisor', value),
   resetDatabase: () => ipcRenderer.invoke('reset-database'),
 });

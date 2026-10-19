@@ -7,26 +7,67 @@ const initSqlJs = require('sql.js');
 const APP_ROOT = app.isPackaged ? path.dirname(app.getPath('exe')) : __dirname;
 const DB_FILE = path.join(APP_ROOT, 'freight-master.db');
 
-// 出厂默认值（也用于“恢复默认数据”）
 const DEFAULT_VOL_DIVISOR = 6000;
-const DEFAULT_US_SURCHARGE = {
-  oversize_girth: 330, // 超大件：围长 >
-  oversize_volume: 283168, // 超大件：体积 >=
-  oversize_weight: 50, // 超大件：实重 >
-  oversize_fee: 500,
-  weight_threshold: 22.5, // 实重 >
-  weight_fee: 120,
-  girth_threshold: 265, // 围长 >
-  girth_fee: 120,
-  side_long_threshold: 120, // 最长边 >
-  side_second_threshold: 75, // 次长边 >
-  side_fee: 120,
+
+// 附加费可判断的字段
+const FIELD_LABELS = {
+  weight: '实重 (KG)',
+  girth: '围长 (CM)',
+  longest: '最长边 (CM)',
+  second_longest: '次长边 (CM)',
+  volume: '体积 (CM³)',
 };
-const DEFAULT_EU_RULES = [
-  { rule_type: 'girth', threshold: 330, amount: 350, enabled: 1 },
-  { rule_type: 'girth', threshold: 300, amount: 300, enabled: 1 },
-  { rule_type: 'weight', threshold: 30, amount: 300, enabled: 1 },
+
+// 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
+const GROUP_META = [
+  { key: 'us', name: '美国', mode: 'zip', surchargeMode: 'stack' },
+  { key: 'eu', name: '欧洲', mode: 'country', surchargeMode: 'max' },
+  { key: 'ca', name: '加拿大', mode: 'country', surchargeMode: 'stack' },
+  { key: 'uk', name: '英国', mode: 'country', surchargeMode: 'stack' },
+  { key: 'au', name: '澳大利亚', mode: 'country', surchargeMode: 'stack' },
 ];
+
+// 出厂默认数据（新库写入，也用于“恢复默认数据”）
+const DEFAULT_DATA = {
+  us: {
+    tiers: [10, 21, 71, 101],
+    rows: [
+      { name: '美西（邮编8,9开头）', matchKey: '8,9', prices: [16.7, 15.2, 13.2, 12.2] },
+      { name: '美中（邮编4,5,6,7开头）', matchKey: '4,5,6,7', prices: [17.7, 16.2, 14.2, 13.2] },
+      { name: '美东（邮编0,1,2,3开头）', matchKey: '0,1,2,3', prices: [18.7, 17.2, 15.2, 14.2] },
+    ],
+    rules: [
+      { rule_group: '实重', field: 'weight', threshold: 22.5, amount: 120, exclusive: 0, enabled: 1 },
+      { rule_group: '围长', field: 'girth', threshold: 265, amount: 120, exclusive: 0, enabled: 1 },
+      { rule_group: '单边', field: 'longest', threshold: 120, amount: 120, exclusive: 0, enabled: 1 },
+      { rule_group: '单边', field: 'second_longest', threshold: 75, amount: 120, exclusive: 0, enabled: 1 },
+      { rule_group: '超大件', field: 'girth', threshold: 330, amount: 500, exclusive: 1, enabled: 1 },
+      { rule_group: '超大件', field: 'volume', threshold: 283168, amount: 500, exclusive: 1, enabled: 1 },
+      { rule_group: '超大件', field: 'weight', threshold: 50, amount: 500, exclusive: 1, enabled: 1 },
+    ],
+  },
+  eu: {
+    tiers: [10, 21, 101],
+    rows: [
+      { name: 'Germany 德国', prices: [15.5, 15.0, 15.0] },
+      { name: 'Poland, Belgium, Luxembourg 波兰、比利时、卢森堡', prices: [18.0, 18.0, 17.0] },
+      { name: 'Czech Republic, Slovakia, Austria, Hungary 捷克、斯洛伐克、奥地利、匈牙利', prices: [18.0, 18.0, 17.5] },
+      { name: 'France 法国', prices: [18.5, 18.0, 17.0] },
+      { name: 'Netherlands, Denmark, Estonia, Lithuania, Monaco, Latvia, Spain(except islands), Italy(except islands) 荷兰、丹麦、爱沙尼亚、立陶宛、摩纳哥、拉脱维亚、西班牙(岛屿除外)、意大利(岛屿除外)', prices: [19.0, 19.0, 18.0] },
+      { name: 'Slovenia, Croatia, Finland, Sweden, Bulgaria 斯洛文尼亚、克罗地亚、芬兰、瑞典、保加利亚', prices: [19.5, 19.0, 19.0] },
+      { name: 'Greece, Ireland, Portugal 希腊、爱尔兰、葡萄牙', prices: [21.0, 21.0, 20.0] },
+    ],
+    rules: [
+      { rule_group: '围长330', field: 'girth', threshold: 330, amount: 350, exclusive: 0, enabled: 1 },
+      { rule_group: '围长300', field: 'girth', threshold: 300, amount: 300, exclusive: 0, enabled: 1 },
+      { rule_group: '实重30', field: 'weight', threshold: 30, amount: 300, exclusive: 0, enabled: 1 },
+    ],
+  },
+  // 以下三个目的地暂无官方报价，单价先置 0 占位，请在「价格管理」里填写
+  ca: { tiers: [10, 21, 101], rows: [{ name: '加拿大 Canada', prices: [0, 0, 0] }], rules: [] },
+  uk: { tiers: [10, 21, 101], rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }], rules: [] },
+  au: { tiers: [10, 21, 101], rows: [{ name: '澳大利亚 Australia', prices: [0, 0, 0] }], rules: [] },
+};
 
 let db = null;
 let SQL = null;
@@ -56,6 +97,10 @@ function tableExists(name) {
   return db.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${name}'`).length > 0;
 }
 
+function lastId() {
+  return db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+}
+
 function getSetting(key, fallback) {
   const rows = db.exec(`SELECT value FROM settings WHERE key = '${key}'`);
   if (!rows.length) return fallback;
@@ -71,42 +116,62 @@ function setSetting(key, value) {
   );
 }
 
-// ---------- 建表与初始化 ----------
+// ---------- 建库 / 迁移 ----------
 function initDb() {
   if (fs.existsSync(DB_FILE)) {
     db = new SQL.Database(fs.readFileSync(DB_FILE));
-    ensureSchema(); // 老数据库补齐新表
+    ensureSchema();
+    ensureTiers(); // 先把报价阶梯补齐，旧数据才有地方落位
+    migrateLegacy(); // 把旧版 us_rates / eu_rates / 附加费配置搬到通用表
+    ensureGroupData(); // 补齐缺少的地区行与附加费规则
     saveDb();
   } else {
     db = new SQL.Database();
+    ensureSchema();
     seedData();
     saveDb();
   }
 }
 
-// 老库升级：缺失的表/配置项自动补齐，不影响已有的价格数据
 function ensureSchema() {
-  if (!tableExists('us_rates')) {
-    createUsRatesTable();
-    seedUsRates();
-  }
-  if (!tableExists('eu_rates')) {
-    createEuRatesTable();
-    seedEuRates();
-  }
   if (!tableExists('settings')) {
-    createSettingsTable();
-    seedSettings();
-  } else if (!db.exec(`SELECT value FROM settings WHERE key = 'vol_divisor'`).length) {
-    seedSettings();
+    db.run(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
   }
-  if (!tableExists('us_surcharge_config')) {
-    createUsSurchargeTable();
-    seedUsSurcharge();
+  if (!tableExists('rate_tiers')) {
+    db.run(`CREATE TABLE rate_tiers (
+      id INTEGER PRIMARY KEY,
+      group_key TEXT NOT NULL,
+      min_weight REAL NOT NULL,
+      label TEXT NOT NULL
+    );`);
   }
-  if (!tableExists('eu_surcharge_rules')) {
-    createEuRulesTable();
-    seedEuRules();
+  if (!tableExists('rate_rows')) {
+    db.run(`CREATE TABLE rate_rows (
+      id INTEGER PRIMARY KEY,
+      group_key TEXT NOT NULL,
+      row_name TEXT NOT NULL,
+      match_key TEXT
+    );`);
+  }
+  if (!tableExists('rate_values')) {
+    db.run(`CREATE TABLE rate_values (
+      row_id INTEGER NOT NULL,
+      tier_id INTEGER NOT NULL,
+      price REAL NOT NULL,
+      PRIMARY KEY (row_id, tier_id)
+    );`);
+  }
+  if (!tableExists('surcharge_rules')) {
+    db.run(`CREATE TABLE surcharge_rules (
+      id INTEGER PRIMARY KEY,
+      group_key TEXT NOT NULL,
+      rule_group TEXT NOT NULL,
+      field TEXT NOT NULL,
+      threshold REAL NOT NULL,
+      amount REAL NOT NULL,
+      exclusive INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1
+    );`);
   }
 }
 
@@ -115,271 +180,279 @@ function saveDb() {
   fs.writeFileSync(DB_FILE, Buffer.from(db.export()));
 }
 
-function seedData() {
-  createUsRatesTable();
-  createEuRatesTable();
-  createSettingsTable();
-  createUsSurchargeTable();
-  createEuRulesTable();
-  seedUsRates();
-  seedEuRates();
-  seedSettings();
-  seedUsSurcharge();
-  seedEuRules();
+function insertTier(groupKey, minWeight) {
+  db.run(`INSERT INTO rate_tiers (group_key, min_weight, label) VALUES (?, ?, ?)`, [
+    groupKey,
+    Number(minWeight),
+    `${Number(minWeight)}KG+`,
+  ]);
+  return lastId();
 }
 
-function createUsRatesTable() {
-  db.run(`
-    CREATE TABLE us_rates (
-      id INTEGER PRIMARY KEY,
-      region_name TEXT NOT NULL,
-      zip_prefixes TEXT NOT NULL,
-      weight_10 REAL NOT NULL,
-      weight_21 REAL NOT NULL,
-      weight_71 REAL NOT NULL,
-      weight_101 REAL NOT NULL
-    );
-  `);
+function insertRateRow(groupKey, name, matchKey) {
+  db.run(`INSERT INTO rate_rows (group_key, row_name, match_key) VALUES (?, ?, ?)`, [
+    groupKey,
+    name,
+    matchKey || null,
+  ]);
+  return lastId();
 }
 
-function createEuRatesTable() {
-  db.run(`
-    CREATE TABLE eu_rates (
-      id INTEGER PRIMARY KEY,
-      country_name TEXT NOT NULL,
-      weight_10 REAL NOT NULL,
-      weight_21 REAL NOT NULL,
-      weight_101 REAL NOT NULL
-    );
-  `);
-}
-
-function createSettingsTable() {
-  db.run(`
-    CREATE TABLE settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-  `);
-}
-
-function createUsSurchargeTable() {
-  db.run(`
-    CREATE TABLE us_surcharge_config (
-      id INTEGER PRIMARY KEY,
-      oversize_girth REAL NOT NULL,
-      oversize_volume REAL NOT NULL,
-      oversize_weight REAL NOT NULL,
-      oversize_fee REAL NOT NULL,
-      weight_threshold REAL NOT NULL,
-      weight_fee REAL NOT NULL,
-      girth_threshold REAL NOT NULL,
-      girth_fee REAL NOT NULL,
-      side_long_threshold REAL NOT NULL,
-      side_second_threshold REAL NOT NULL,
-      side_fee REAL NOT NULL
-    );
-  `);
-}
-
-function createEuRulesTable() {
-  db.run(`
-    CREATE TABLE eu_surcharge_rules (
-      id INTEGER PRIMARY KEY,
-      rule_type TEXT NOT NULL,
-      threshold REAL NOT NULL,
-      amount REAL NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-  `);
-}
-
-function seedUsRates() {
-  const usStmt = db.prepare(`
-    INSERT INTO us_rates (region_name, zip_prefixes, weight_10, weight_21, weight_71, weight_101)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  usStmt.run(['美西（邮编8,9开头）', '8,9', 16.7, 15.2, 13.2, 12.2]);
-  usStmt.run(['美中（邮编4,5,6,7开头）', '4,5,6,7', 17.7, 16.2, 14.2, 13.2]);
-  usStmt.run(['美东（邮编0,1,2,3开头）', '0,1,2,3', 18.7, 17.2, 15.2, 14.2]);
-  usStmt.free();
-}
-
-function seedEuRates() {
-  const euStmt = db.prepare(`
-    INSERT INTO eu_rates (country_name, weight_10, weight_21, weight_101)
-    VALUES (?, ?, ?, ?)
-  `);
-  euStmt.run(['Germany 德国', 15.5, 15.0, 15.0]);
-  euStmt.run(['Poland, Belgium, Luxembourg 波兰、比利时、卢森堡', 18.0, 18.0, 17.0]);
-  euStmt.run(['Czech Republic, Slovakia, Austria, Hungary 捷克、斯洛伐克、奥地利、匈牙利', 18.0, 18.0, 17.5]);
-  euStmt.run(['France 法国', 18.5, 18.0, 17.0]);
-  euStmt.run(['Netherlands, Denmark, Estonia, Lithuania, Monaco, Latvia, Spain(except islands), Italy(except islands) 荷兰、丹麦、爱沙尼亚、立陶宛、摩纳哥、拉脱维亚、西班牙(岛屿除外)、意大利(岛屿除外)', 19.0, 19.0, 18.0]);
-  euStmt.run(['Slovenia, Croatia, Finland, Sweden, Bulgaria 斯洛文尼亚、克罗地亚、芬兰、瑞典、保加利亚', 19.5, 19.0, 19.0]);
-  euStmt.run(['Greece, Ireland, Portugal 希腊、爱尔兰、葡萄牙', 21.0, 21.0, 20.0]);
-  euStmt.free();
-}
-
-function seedSettings() {
-  setSetting('vol_divisor', DEFAULT_VOL_DIVISOR);
-}
-
-function seedUsSurcharge() {
-  const c = DEFAULT_US_SURCHARGE;
+function insertValue(rowId, tierId, price) {
   db.run(
-    `INSERT INTO us_surcharge_config
-     (id, oversize_girth, oversize_volume, oversize_weight, oversize_fee,
-      weight_threshold, weight_fee, girth_threshold, girth_fee,
-      side_long_threshold, side_second_threshold, side_fee)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      c.oversize_girth, c.oversize_volume, c.oversize_weight, c.oversize_fee,
-      c.weight_threshold, c.weight_fee, c.girth_threshold, c.girth_fee,
-      c.side_long_threshold, c.side_second_threshold, c.side_fee,
-    ]
+    `INSERT INTO rate_values (row_id, tier_id, price) VALUES (?, ?, ?)
+     ON CONFLICT(row_id, tier_id) DO UPDATE SET price = excluded.price`,
+    [rowId, tierId, toNum(price, 0)]
   );
 }
 
-function seedEuRules() {
-  const stmt = db.prepare(`
-    INSERT INTO eu_surcharge_rules (rule_type, threshold, amount, enabled) VALUES (?, ?, ?, ?)
-  `);
-  DEFAULT_EU_RULES.forEach(r => stmt.run([r.rule_type, r.threshold, r.amount, r.enabled]));
-  stmt.free();
+function insertRule(groupKey, rule) {
+  db.run(
+    `INSERT INTO surcharge_rules (group_key, rule_group, field, threshold, amount, exclusive, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      groupKey,
+      rule.rule_group || '规则',
+      FIELD_LABELS[rule.field] ? rule.field : 'weight',
+      toNum(rule.threshold, 0),
+      toNum(rule.amount, 0),
+      Number(rule.exclusive) === 1 ? 1 : 0,
+      rule.enabled === undefined ? 1 : Number(rule.enabled) === 1 ? 1 : 0,
+    ]
+  );
+  return lastId();
 }
 
-// ---------- 读取配置 ----------
-function getUsSurchargeConfig() {
-  const rows = rowsToObjects(db.exec('SELECT * FROM us_surcharge_config WHERE id = 1'));
-  return rows.length ? rows[0] : { ...DEFAULT_US_SURCHARGE };
+// 补齐每个目的地的报价阶梯（缺失才补，已改过的原样保留）
+function ensureTiers() {
+  GROUP_META.forEach(group => {
+    if (getTiers(group.key).length === 0) {
+      DEFAULT_DATA[group.key].tiers.forEach(minWeight => insertTier(group.key, minWeight));
+    }
+  });
 }
 
-function getEuRules() {
-  return rowsToObjects(db.exec('SELECT * FROM eu_surcharge_rules ORDER BY amount DESC, id ASC'));
+// 补齐每个目的地的地区行与附加费规则
+function ensureGroupData() {
+  GROUP_META.forEach(group => {
+    const data = DEFAULT_DATA[group.key];
+    const tiers = getTiers(group.key);
+
+    if (getRateRows(group.key).length === 0) {
+      data.rows.forEach(row => {
+        const rowId = insertRateRow(group.key, row.name, row.matchKey);
+        row.prices.forEach((price, i) => {
+          if (tiers[i]) insertValue(rowId, tiers[i].id, price);
+        });
+      });
+    } else {
+      // 老库搬过来的行：把缺失的价格单元格补成 0，保证表格完整
+      const values = getRateValues(group.key);
+      getRateRows(group.key).forEach(row => {
+        tiers.forEach(tier => {
+          if (!values.some(v => v.row_id === row.id && v.tier_id === tier.id)) {
+            insertValue(row.id, tier.id, 0);
+          }
+        });
+      });
+    }
+
+    if (getSetting('seeded_' + group.key, null) === null) {
+      if (getRules(group.key).length === 0) data.rules.forEach(rule => insertRule(group.key, rule));
+      setSetting('seeded_' + group.key, '1');
+    }
+  });
+}
+
+function seedData() {
+  setSetting('vol_divisor', DEFAULT_VOL_DIVISOR);
+  GROUP_META.forEach(group => setSetting('surcharge_mode_' + group.key, group.surchargeMode));
+  ensureTiers();
+  ensureGroupData();
+}
+
+// 老库升级：旧表数据搬到新表，已有的自定义价格原样保留
+function migrateLegacy() {
+  if (tableExists('us_rates') && getRateRows('us').length === 0) {
+    const tiers = getTiers('us');
+    rowsToObjects(db.exec('SELECT * FROM us_rates ORDER BY id')).forEach(r => {
+      const rowId = insertRateRow('us', r.region_name, r.zip_prefixes);
+      [r.weight_10, r.weight_21, r.weight_71, r.weight_101].forEach((price, i) => {
+        if (tiers[i]) insertValue(rowId, tiers[i].id, price);
+      });
+    });
+  }
+
+  if (tableExists('eu_rates') && getRateRows('eu').length === 0) {
+    const tiers = getTiers('eu');
+    rowsToObjects(db.exec('SELECT * FROM eu_rates ORDER BY id')).forEach(r => {
+      const rowId = insertRateRow('eu', r.country_name, null);
+      [r.weight_10, r.weight_21, r.weight_101].forEach((price, i) => {
+        if (tiers[i]) insertValue(rowId, tiers[i].id, price);
+      });
+    });
+  }
+
+  if (tableExists('us_surcharge_config') && getRules('us').length === 0) {
+    const c = rowsToObjects(db.exec('SELECT * FROM us_surcharge_config WHERE id = 1'))[0];
+    if (c) {
+      const fee = threshold => toNum(threshold, 0);
+      insertRule('us', { rule_group: '实重', field: 'weight', threshold: c.weight_threshold, amount: c.weight_fee });
+      insertRule('us', { rule_group: '围长', field: 'girth', threshold: c.girth_threshold, amount: c.girth_fee });
+      insertRule('us', { rule_group: '单边', field: 'longest', threshold: c.side_long_threshold, amount: c.side_fee });
+      insertRule('us', { rule_group: '单边', field: 'second_longest', threshold: c.side_second_threshold, amount: c.side_fee });
+      insertRule('us', { rule_group: '超大件', field: 'girth', threshold: c.oversize_girth, amount: c.oversize_fee, exclusive: 1 });
+      insertRule('us', { rule_group: '超大件', field: 'volume', threshold: c.oversize_volume, amount: c.oversize_fee, exclusive: 1 });
+      insertRule('us', { rule_group: '超大件', field: 'weight', threshold: fee(c.oversize_weight), amount: c.oversize_fee, exclusive: 1 });
+    }
+  }
+
+  if (tableExists('eu_surcharge_rules') && getRules('eu').length === 0) {
+    rowsToObjects(db.exec('SELECT * FROM eu_surcharge_rules ORDER BY id')).forEach(r => {
+      insertRule('eu', {
+        rule_group: `${r.rule_type === 'girth' ? '围长' : '实重'}${r.threshold}`,
+        field: r.rule_type,
+        threshold: r.threshold,
+        amount: r.amount,
+        enabled: r.enabled,
+      });
+    });
+  }
+
+  if (!db.exec(`SELECT value FROM settings WHERE key = 'vol_divisor'`).length) {
+    setSetting('vol_divisor', DEFAULT_VOL_DIVISOR);
+  }
+  GROUP_META.forEach(group => {
+    if (!db.exec(`SELECT value FROM settings WHERE key = 'surcharge_mode_${group.key}'`).length) {
+      setSetting('surcharge_mode_' + group.key, group.surchargeMode);
+    }
+  });
+}
+
+// ---------- 查询 ----------
+function getTiers(groupKey) {
+  return rowsToObjects(
+    db.exec(`SELECT * FROM rate_tiers WHERE group_key = '${groupKey}' ORDER BY min_weight ASC, id ASC`)
+  );
+}
+
+function getRateRows(groupKey) {
+  return rowsToObjects(db.exec(`SELECT * FROM rate_rows WHERE group_key = '${groupKey}' ORDER BY id ASC`));
+}
+
+function getRateValues(groupKey) {
+  return rowsToObjects(
+    db.exec(
+      `SELECT v.* FROM rate_values v
+       JOIN rate_rows r ON r.id = v.row_id
+       WHERE r.group_key = '${groupKey}'`
+    )
+  );
+}
+
+function getRules(groupKey) {
+  return rowsToObjects(
+    db.exec(`SELECT * FROM surcharge_rules WHERE group_key = '${groupKey}' ORDER BY id ASC`)
+  );
+}
+
+function getGroupConfig(groupKey) {
+  const meta = GROUP_META.find(g => g.key === groupKey);
+  const tiers = getTiers(groupKey);
+  const rows = getRateRows(groupKey);
+  const values = getRateValues(groupKey);
+  return {
+    ...meta,
+    surchargeMode: getSetting('surcharge_mode_' + groupKey, meta.surchargeMode),
+    tiers,
+    rows: rows.map(row => ({
+      ...row,
+      prices: tiers.reduce((acc, tier) => {
+        const v = values.find(x => x.row_id === row.id && x.tier_id === tier.id);
+        acc[tier.id] = v ? v.price : 0;
+        return acc;
+      }, {}),
+    })),
+    rules: getRules(groupKey),
+  };
+}
+
+function getConfig() {
+  return {
+    volDivisor: toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR),
+    groups: GROUP_META.map(g => getGroupConfig(g.key)),
+  };
 }
 
 // ---------- 计算 ----------
-function getUsRegionByZip(zip) {
-  const first = String(zip).trim()[0];
-  if (!/[0-9]/.test(first || '')) throw new Error('无法识别的美国邮编，请检查输入');
-  const row = db.exec(`SELECT * FROM us_rates WHERE ',' || zip_prefixes || ',' LIKE '%,${first},%'`)[0];
-  if (!row) return null;
-  const cols = row.columns;
-  return row.values[0].reduce((obj, val, i) => {
-    obj[cols[i]] = val;
-    return obj;
-  }, {});
-}
-
-function getUsRateByWeight(region, chargedWeight) {
-  let col = 'weight_10';
-  if (chargedWeight >= 101) col = 'weight_101';
-  else if (chargedWeight >= 71) col = 'weight_71';
-  else if (chargedWeight >= 21) col = 'weight_21';
-  return region[col];
-}
-
-function getEuRateByCountryAndWeight(countryId, chargedWeight) {
-  const row = db.exec(`SELECT * FROM eu_rates WHERE id = ${Number(countryId)}`)[0];
-  if (!row) return null;
-  const data = row.values[0].reduce((obj, val, i) => {
-    obj[row.columns[i]] = val;
-    return obj;
-  }, {});
-  let col = 'weight_10';
-  if (chargedWeight >= 101) col = 'weight_101';
-  else if (chargedWeight >= 21) col = 'weight_21';
-  return { ...data, unitPrice: data[col], tier: col };
-}
-
-function calculateGirthAndWeight(length, width, height, volDivisor) {
-  const sides = [length, width, height].map(Number).sort((a, b) => a - b);
-  const girth = (sides[0] + sides[1]) * 2 + sides[2];
+function measure(length, width, height, volDivisor) {
+  const sides = [Number(length), Number(width), Number(height)].sort((a, b) => a - b);
   const volume = length * width * height;
-  const chargedWeight = Math.ceil(volume / volDivisor);
   return {
     sides,
-    girth,
     volume,
-    chargedWeight,
+    girth: (sides[0] + sides[1]) * 2 + sides[2],
     longest: sides[2],
     secondLongest: sides[1],
+    volWeight: Math.ceil(volume / volDivisor),
   };
 }
 
-// 美国附加费：命中超大件则不叠加其他项；否则逐项叠加
-function calculateUsSurcharge(box, cfg) {
-  const detail = [];
-  const c = {
-    oversize_girth: toNum(cfg.oversize_girth, DEFAULT_US_SURCHARGE.oversize_girth),
-    oversize_volume: toNum(cfg.oversize_volume, DEFAULT_US_SURCHARGE.oversize_volume),
-    oversize_weight: toNum(cfg.oversize_weight, DEFAULT_US_SURCHARGE.oversize_weight),
-    oversize_fee: toNum(cfg.oversize_fee, DEFAULT_US_SURCHARGE.oversize_fee),
-    weight_threshold: toNum(cfg.weight_threshold, DEFAULT_US_SURCHARGE.weight_threshold),
-    weight_fee: toNum(cfg.weight_fee, DEFAULT_US_SURCHARGE.weight_fee),
-    girth_threshold: toNum(cfg.girth_threshold, DEFAULT_US_SURCHARGE.girth_threshold),
-    girth_fee: toNum(cfg.girth_fee, DEFAULT_US_SURCHARGE.girth_fee),
-    side_long_threshold: toNum(cfg.side_long_threshold, DEFAULT_US_SURCHARGE.side_long_threshold),
-    side_second_threshold: toNum(cfg.side_second_threshold, DEFAULT_US_SURCHARGE.side_second_threshold),
-    side_fee: toNum(cfg.side_fee, DEFAULT_US_SURCHARGE.side_fee),
-  };
-
-  // 三个条件满足任一即为超大件，此时不再叠加下列项目
-  const isOversize =
-    box.girth >= c.oversize_girth ||
-    box.volume >= c.oversize_volume ||
-    box.actualWeight >= c.oversize_weight;
-  if (isOversize) {
-    detail.push(
-      `超大件附加费 +${c.oversize_fee} 元（围长≥${c.oversize_girth} 或 体积≥${c.oversize_volume} 或 实重≥${c.oversize_weight}KG）`
-    );
-    return { surcharge: c.oversize_fee, detail };
-  }
-
-  let surcharge = 0;
-  if (box.actualWeight >= c.weight_threshold) {
-    surcharge += c.weight_fee;
-    detail.push(`实重≥${c.weight_threshold}KG +${c.weight_fee} 元`);
-  }
-  if (box.girth >= c.girth_threshold) {
-    surcharge += c.girth_fee;
-    detail.push(`围长≥${c.girth_threshold} +${c.girth_fee} 元`);
-  }
-  if (box.longest >= c.side_long_threshold || box.secondLongest >= c.side_second_threshold) {
-    surcharge += c.side_fee;
-    detail.push(
-      `最长边≥${c.side_long_threshold}CM 或 次长边≥${c.side_second_threshold}CM +${c.side_fee} 元`
-    );
-  }
-  return { surcharge, detail };
+// 报价表第一栏 = 起重；计费重 = max(起重, 体积重)
+function pickTier(tiers, chargedWeight) {
+  const sorted = [...tiers].sort((a, b) => a.min_weight - b.min_weight);
+  let chosen = sorted[0];
+  sorted.forEach(tier => {
+    if (chargedWeight >= tier.min_weight) chosen = tier;
+  });
+  return chosen;
 }
 
-// 欧洲附加费：不叠加，命中多条取金额最高的一条
-function calculateEuSurcharge(box, rules) {
-  let best = null;
+// 规则组内满足任一条件只收一次（取组内最高金额）；规则组之间按模式叠加或取最高
+function calculateSurcharge(m, rules, mode) {
+  const fields = {
+    weight: m.actualWeight,
+    girth: m.girth,
+    longest: m.longest,
+    second_longest: m.secondLongest,
+    volume: m.volume,
+  };
+
+  const matched = {};
   rules
     .filter(r => Number(r.enabled) === 1)
     .forEach(r => {
-      const value = r.rule_type === 'girth' ? box.girth : box.actualWeight;
-      if (value >= toNum(r.threshold, 0) && (!best || toNum(r.amount, 0) > toNum(best.amount, 0))) {
-        best = r;
+      const value = fields[r.field];
+      if (value === undefined || !(value >= toNum(r.threshold, 0))) return;
+      const amount = toNum(r.amount, 0);
+      const current = matched[r.rule_group];
+      if (!current || amount > current.amount) {
+        matched[r.rule_group] = {
+          amount,
+          exclusive: Number(r.exclusive) === 1,
+          detail: `${r.rule_group}：${FIELD_LABELS[r.field] || r.field} ≥ ${r.threshold} → +${amount} 元`,
+        };
       }
     });
-  if (!best) return { surcharge: 0, detail: [] };
-  const label = best.rule_type === 'girth' ? `围长≥${best.threshold}` : `实重≥${best.threshold}KG`;
-  return { surcharge: toNum(best.amount, 0), detail: [`${label} +${best.amount} 元`] };
-}
 
-function summarize(items) {
-  const sum = key => round2(items.reduce((acc, item) => acc + item[key], 0));
+  const groups = Object.values(matched);
+  if (!groups.length) return { surcharge: 0, detail: [] };
+
+  if (mode === 'max') {
+    const best = groups.reduce((a, b) => (b.amount > a.amount ? b : a));
+    return { surcharge: best.amount, detail: [best.detail] };
+  }
+
+  const exclusive = groups.filter(g => g.exclusive);
+  if (exclusive.length) {
+    // 命中超大件：只收超大件，前面 1/2/3 项不再叠加
+    const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
+    return { surcharge: best.amount, detail: [best.detail] };
+  }
+
   return {
-    boxCount: items.length,
-    totalActualWeight: sum('actualWeight'),
-    totalChargedWeight: items.reduce((acc, item) => acc + item.chargedWeight, 0),
-    totalVolume: items.reduce((acc, item) => acc + item.volume, 0),
-    totalBaseFreight: sum('baseFreight'),
-    totalSurcharge: sum('surcharge'),
-    total: sum('total'),
+    surcharge: groups.reduce((sum, g) => sum + g.amount, 0),
+    detail: groups.map(g => g.detail),
   };
 }
 
@@ -392,36 +465,56 @@ function normalizeBoxes(boxes) {
       height: Number(box.height),
       weight: Number(box.weight),
     }))
-    .filter(
-      box =>
-        box.length > 0 && box.width > 0 && box.height > 0 && !isNaN(box.weight)
-    );
-  if (!result.length) throw new Error('请至少填写一个完整的箱子（长、宽、高、实重）');
+    .filter(box => box.length > 0 && box.width > 0 && box.height > 0 && !isNaN(box.weight));
+  if (!result.length) throw new Error('请至少填写一个完整的箱规（长、宽、高、实重）');
   return result;
 }
 
-function calculateUs(zip, rawBoxes) {
-  const region = getUsRegionByZip(zip);
-  if (!region) throw new Error('无法识别的美国邮编，请检查输入');
+function calculateGroup(groupKey, selection, rawBoxes) {
+  const meta = GROUP_META.find(g => g.key === groupKey);
+  if (!meta) throw new Error('未知的目的地');
+
+  const rows = getRateRows(groupKey);
+  let row = null;
+  if (meta.mode === 'zip') {
+    const first = String(selection.zip || '').trim()[0];
+    if (!/[0-9]/.test(first || '')) throw new Error('无法识别的美国邮编，请检查输入');
+    row = rows.find(r => `,${r.match_key || ''},`.includes(`,${first},`));
+    if (!row) throw new Error('无法识别的美国邮编，请检查输入');
+  } else {
+    row = rows.find(r => r.id === Number(selection.rowId));
+    if (!row) throw new Error('请选择目的地');
+  }
+
+  const tiers = getTiers(groupKey);
+  if (!tiers.length) throw new Error(`「${meta.name}」还没有设置报价阶梯`);
+  const minWeight = toNum(tiers[0].min_weight, 0); // 起重 = 报价表第一栏
+  const volDivisor = toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
+  const mode = getSetting('surcharge_mode_' + groupKey, meta.surchargeMode);
+  const rules = getRules(groupKey);
+  const values = getRateValues(groupKey).filter(v => v.row_id === row.id);
 
   const boxes = normalizeBoxes(rawBoxes);
-  const volDivisor = toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
-  const cfg = getUsSurchargeConfig();
-
   const items = boxes.map((box, index) => {
-    const m = calculateGirthAndWeight(box.length, box.width, box.height, volDivisor);
-    const actualWeight = box.weight;
-    const unitPrice = getUsRateByWeight(region, m.chargedWeight);
-    const baseFreight = m.chargedWeight * unitPrice;
-    const { surcharge, detail } = calculateUsSurcharge({ ...m, actualWeight }, cfg);
+    const m = measure(box.length, box.width, box.height, volDivisor);
+    m.actualWeight = box.weight;
+
+    const chargedWeight = Math.max(minWeight, m.volWeight);
+    const tier = pickTier(tiers, chargedWeight);
+    const value = values.find(v => v.tier_id === tier.id);
+    const unitPrice = value ? value.price : 0;
+    const baseFreight = chargedWeight * unitPrice;
+    const { surcharge, detail } = calculateSurcharge(m, rules, mode);
 
     return {
       index: index + 1,
       sides: `${box.length}×${box.width}×${box.height}`,
       girth: m.girth,
       volume: m.volume,
-      actualWeight,
-      chargedWeight: m.chargedWeight,
+      actualWeight: box.weight,
+      volWeight: m.volWeight,
+      chargedWeight,
+      tierLabel: tier.label,
       unitPrice,
       baseFreight: round2(baseFreight),
       surcharge: round2(surcharge),
@@ -430,48 +523,21 @@ function calculateUs(zip, rawBoxes) {
     };
   });
 
+  const sum = key => round2(items.reduce((acc, item) => acc + item[key], 0));
   return {
-    region: region.region_name,
-    zip,
+    groupName: meta.name,
+    destination: row.row_name,
+    minWeight,
     boxes: items,
-    summary: summarize(items),
-  };
-}
-
-function calculateEu(countryId, rawBoxes) {
-  const rate = getEuRateByCountryAndWeight(countryId, 0);
-  if (!rate) throw new Error('请选择有效的欧洲国家');
-
-  const boxes = normalizeBoxes(rawBoxes);
-  const volDivisor = toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
-  const rules = getEuRules();
-
-  const items = boxes.map((box, index) => {
-    const m = calculateGirthAndWeight(box.length, box.width, box.height, volDivisor);
-    const actualWeight = box.weight;
-    const rateInfo = getEuRateByCountryAndWeight(countryId, m.chargedWeight);
-    const baseFreight = m.chargedWeight * rateInfo.unitPrice;
-    const { surcharge, detail } = calculateEuSurcharge({ ...m, actualWeight }, rules);
-
-    return {
-      index: index + 1,
-      sides: `${box.length}×${box.width}×${box.height}`,
-      girth: m.girth,
-      volume: m.volume,
-      actualWeight,
-      chargedWeight: m.chargedWeight,
-      unitPrice: rateInfo.unitPrice,
-      baseFreight: round2(baseFreight),
-      surcharge: round2(surcharge),
-      surchargeDetail: detail,
-      total: round2(baseFreight + surcharge),
-    };
-  });
-
-  return {
-    country: rate.country_name,
-    boxes: items,
-    summary: summarize(items),
+    summary: {
+      boxCount: items.length,
+      totalActualWeight: sum('actualWeight'),
+      totalChargedWeight: items.reduce((acc, item) => acc + item.chargedWeight, 0),
+      totalVolume: items.reduce((acc, item) => acc + item.volume, 0),
+      totalBaseFreight: sum('baseFreight'),
+      totalSurcharge: sum('surcharge'),
+      total: sum('total'),
+    },
   };
 }
 
@@ -481,8 +547,8 @@ async function createWindow() {
   initDb();
 
   const win = new BrowserWindow({
-    width: 1180,
-    height: 900,
+    width: 1280,
+    height: 940,
     title: '运费大师',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -501,129 +567,77 @@ app.on('window-all-closed', () => {
 });
 
 // ---------- 接口 ----------
-ipcMain.handle('get-us-rates', () => {
-  const rows = db.exec('SELECT * FROM us_rates ORDER BY id');
-  if (!rows.length) return [];
-  return rows[0].values.map(v =>
-    v.reduce((obj, val, i) => {
-      obj[rows[0].columns[i]] = val;
-      return obj;
-    }, {})
-  );
+ipcMain.handle('get-config', () => getConfig());
+
+ipcMain.handle('calculate', (event, data) => {
+  return calculateGroup(data.groupKey, { zip: data.zip, rowId: data.rowId }, data.boxes);
 });
 
-ipcMain.handle('get-eu-rates', () => {
-  const rows = db.exec('SELECT * FROM eu_rates ORDER BY id');
-  if (!rows.length) return [];
-  return rows[0].values.map(v =>
-    v.reduce((obj, val, i) => {
-      obj[rows[0].columns[i]] = val;
-      return obj;
-    }, {})
-  );
+function saveGroupConfig(data) {
+  const key = data.groupKey;
+  if (!GROUP_META.some(g => g.key === key)) throw new Error('未知的目的地');
+
+  setSetting('surcharge_mode_' + key, data.surchargeMode === 'max' ? 'max' : 'stack');
+
+  (data.tiers || []).forEach(tier => {
+    const minWeight = toNum(tier.min_weight, 0);
+    db.run(`UPDATE rate_tiers SET min_weight = ?, label = ? WHERE id = ?`, [
+      minWeight,
+      `${minWeight}KG+`,
+      Number(tier.id),
+    ]);
+  });
+
+  (data.rows || []).forEach(row => {
+    db.run(`UPDATE rate_rows SET row_name = ?, match_key = ? WHERE id = ?`, [
+      row.name,
+      row.matchKey || null,
+      Number(row.id),
+    ]);
+    Object.keys(row.prices || {}).forEach(tierId => {
+      insertValue(Number(row.id), Number(tierId), row.prices[tierId]);
+    });
+  });
+
+  db.run(`DELETE FROM surcharge_rules WHERE group_key = ?`, [key]);
+  (data.rules || []).forEach(rule => insertRule(key, rule));
+
+  saveDb();
+  return getGroupConfig(key);
+}
+
+ipcMain.handle('save-group', (event, data) => saveGroupConfig(data));
+
+ipcMain.handle('add-rate-row', (event, data) => {
+  if (!GROUP_META.some(g => g.key === data.groupKey)) throw new Error('未知的目的地');
+  const rowId = insertRateRow(data.groupKey, data.name || '新增地区', data.matchKey);
+  getTiers(data.groupKey).forEach(tier => insertValue(rowId, tier.id, 0));
+  saveDb();
+  return getGroupConfig(data.groupKey);
 });
 
-ipcMain.handle('calculate-us', (event, data) => {
-  return calculateUs(data.zip, data.boxes);
+ipcMain.handle('delete-rate-row', (event, data) => {
+  db.run(`DELETE FROM rate_values WHERE row_id = ?`, [Number(data.rowId)]);
+  db.run(`DELETE FROM rate_rows WHERE id = ?`, [Number(data.rowId)]);
+  saveDb();
+  return getGroupConfig(data.groupKey);
 });
 
-ipcMain.handle('calculate-eu', (event, data) => {
-  return calculateEu(data.countryId, data.boxes);
-});
-
-ipcMain.handle('update-us-rate', (event, data) => {
-  const stmt = db.prepare(`
-    UPDATE us_rates SET weight_10 = ?, weight_21 = ?, weight_71 = ?, weight_101 = ? WHERE id = ?
-  `);
-  stmt.run([data.weight_10, data.weight_21, data.weight_71, data.weight_101, data.id]);
-  stmt.free();
+ipcMain.handle('set-vol-divisor', (event, value) => {
+  setSetting('vol_divisor', toNum(value, DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR);
   saveDb();
   return true;
-});
-
-ipcMain.handle('update-eu-rate', (event, data) => {
-  const stmt = db.prepare(`
-    UPDATE eu_rates SET weight_10 = ?, weight_21 = ?, weight_101 = ? WHERE id = ?
-  `);
-  stmt.run([data.weight_10, data.weight_21, data.weight_101, data.id]);
-  stmt.free();
-  saveDb();
-  return true;
-});
-
-ipcMain.handle('get-settings', () => {
-  return {
-    volDivisor: toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR),
-    usSurcharge: getUsSurchargeConfig(),
-    euRules: getEuRules(),
-  };
-});
-
-ipcMain.handle('update-settings', (event, data) => {
-  const c = data.usSurcharge || {};
-  setSetting('vol_divisor', toNum(data.volDivisor, DEFAULT_VOL_DIVISOR));
-
-  const stmt = db.prepare(`
-    UPDATE us_surcharge_config SET
-      oversize_girth = ?, oversize_volume = ?, oversize_weight = ?, oversize_fee = ?,
-      weight_threshold = ?, weight_fee = ?, girth_threshold = ?, girth_fee = ?,
-      side_long_threshold = ?, side_second_threshold = ?, side_fee = ?
-    WHERE id = 1
-  `);
-  stmt.run([
-    toNum(c.oversize_girth, DEFAULT_US_SURCHARGE.oversize_girth),
-    toNum(c.oversize_volume, DEFAULT_US_SURCHARGE.oversize_volume),
-    toNum(c.oversize_weight, DEFAULT_US_SURCHARGE.oversize_weight),
-    toNum(c.oversize_fee, DEFAULT_US_SURCHARGE.oversize_fee),
-    toNum(c.weight_threshold, DEFAULT_US_SURCHARGE.weight_threshold),
-    toNum(c.weight_fee, DEFAULT_US_SURCHARGE.weight_fee),
-    toNum(c.girth_threshold, DEFAULT_US_SURCHARGE.girth_threshold),
-    toNum(c.girth_fee, DEFAULT_US_SURCHARGE.girth_fee),
-    toNum(c.side_long_threshold, DEFAULT_US_SURCHARGE.side_long_threshold),
-    toNum(c.side_second_threshold, DEFAULT_US_SURCHARGE.side_second_threshold),
-    toNum(c.side_fee, DEFAULT_US_SURCHARGE.side_fee),
-  ]);
-  stmt.free();
-  saveDb();
-  return true;
-});
-
-ipcMain.handle('add-eu-rule', () => {
-  db.run(`INSERT INTO eu_surcharge_rules (rule_type, threshold, amount, enabled) VALUES ('girth', 300, 300, 1)`);
-  saveDb();
-  return getEuRules();
-});
-
-ipcMain.handle('update-eu-rule', (event, data) => {
-  const stmt = db.prepare(`
-    UPDATE eu_surcharge_rules SET rule_type = ?, threshold = ?, amount = ?, enabled = ? WHERE id = ?
-  `);
-  stmt.run([
-    data.rule_type === 'weight' ? 'weight' : 'girth',
-    toNum(data.threshold, 0),
-    toNum(data.amount, 0),
-    Number(data.enabled) === 1 ? 1 : 0,
-    data.id,
-  ]);
-  stmt.free();
-  saveDb();
-  return getEuRules();
-});
-
-ipcMain.handle('delete-eu-rule', (event, data) => {
-  db.run(`DELETE FROM eu_surcharge_rules WHERE id = ?`, [data.id]);
-  saveDb();
-  return getEuRules();
 });
 
 ipcMain.handle('reset-database', () => {
   db.close();
   if (fs.existsSync(DB_FILE)) fs.unlinkSync(DB_FILE);
   db = new SQL.Database();
+  ensureSchema();
   seedData();
   saveDb();
   return true;
 });
 
 // 供自动化测试调用（作为 Electron 入口运行时无副作用）
-module.exports = { calculateUs, calculateEu };
+module.exports = { calculateGroup, getConfig, saveGroupConfig };
