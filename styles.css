@@ -407,16 +407,6 @@ th input {
   width: 90px;
 }
 
-.result-item.highlight {
-  background: #e8f5e9;
-  border-radius: 8px;
-  padding: 8px 12px;
-}
-
-.result-item.highlight .value {
-  color: #2e7d32;
-}
-
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
