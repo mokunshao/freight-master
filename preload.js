@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('freightApi', {
   deleteRateRow: data => ipcRenderer.invoke('delete-rate-row', data),
   setVolDivisor: value => ipcRenderer.invoke('set-vol-divisor', value),
   resetDatabase: () => ipcRenderer.invoke('reset-database'),
+  exportConfig: () => ipcRenderer.invoke('export-config'),
+  importConfig: () => ipcRenderer.invoke('import-config'),
 });

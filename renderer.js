@@ -165,6 +165,112 @@ btnClearAll.addEventListener('click', () => {
   showToast('箱规与目的地已清空');
 });
 
+// ---------- 批量导入箱规 ----------
+const btnBulkToggle = document.getElementById('btn-bulk-toggle');
+const bulkPanel = document.getElementById('bulk-panel');
+const bulkText = document.getElementById('bulk-text');
+const btnBulkFill = document.getElementById('btn-bulk-fill');
+const btnBulkCalc = document.getElementById('btn-bulk-calc');
+const btnBulkCancel = document.getElementById('btn-bulk-cancel');
+const bulkFeedback = document.getElementById('bulk-feedback');
+
+// 从一段文本里挑出「重量 + 三边尺寸」，一行一箱；重量和尺寸分行写也能配上
+function parseBulkBoxes(text) {
+  const parsed = [];
+  const errors = [];
+  let pendingWeight = null;
+
+  String(text || '')
+    .split(/\r?\n/)
+    .forEach((raw, i) => {
+      const line = raw.trim();
+      if (!line) return;
+
+      // 重量：优先找带单位的（32.60kg / 32.60 千克 / 32.60公斤），退化到「重量」关键字后的数字
+      const weightMatch =
+        line.match(/(\d+(?:\.\d+)?)\s*(?:kg|千克|公斤)/i) ||
+        line.match(/(?:重量|实重|weight)\s*[:：]?\s*(\d+(?:\.\d+)?)/i);
+      const weight = weightMatch ? Number(weightMatch[1]) : null;
+
+      // 尺寸：三个数用 x × * · / 等分隔（69*67*59、69x67x59、69×67×59）
+      const sizeMatch = line.match(
+        /(\d+(?:\.\d+)?)\s*[xX×*·\/\\]\s*(\d+(?:\.\d+)?)\s*[xX×*·\/\\]\s*(\d+(?:\.\d+)?)/
+      );
+      const dims = sizeMatch ? [Number(sizeMatch[1]), Number(sizeMatch[2]), Number(sizeMatch[3])] : null;
+
+      // 只有重量：先记下，等下一行给尺寸
+      if (weight !== null && !dims) {
+        pendingWeight = weight;
+        return;
+      }
+
+      if (dims) {
+        const resolvedWeight = weight !== null ? weight : pendingWeight;
+        pendingWeight = null;
+        if (resolvedWeight === null) {
+          errors.push(`第 ${i + 1} 行：识别到尺寸 ${dims.join('×')}，但没找到重量`);
+          return;
+        }
+        parsed.push({ length: dims[0], width: dims[1], height: dims[2], weight: resolvedWeight });
+        return;
+      }
+
+      errors.push(`第 ${i + 1} 行：「${line}」 无法识别（需要重量和三边尺寸）`);
+    });
+
+  return { parsed, errors };
+}
+
+function applyParsedBoxes(parsed) {
+  boxes = parsed.map(b => ({
+    length: String(b.length),
+    width: String(b.width),
+    height: String(b.height),
+    weight: String(b.weight),
+  }));
+  if (!boxes.length) boxes.push(createBox());
+  renderBoxes();
+}
+
+btnBulkToggle.addEventListener('click', () => {
+  const opening = bulkPanel.style.display === 'none';
+  bulkPanel.style.display = opening ? 'block' : 'none';
+  bulkFeedback.textContent = '';
+  if (opening) bulkText.focus();
+});
+
+btnBulkCancel.addEventListener('click', () => {
+  bulkPanel.style.display = 'none';
+  bulkText.value = '';
+  bulkFeedback.textContent = '';
+});
+
+btnBulkFill.addEventListener('click', () => {
+  const { parsed, errors } = parseBulkBoxes(bulkText.value);
+  if (!parsed.length) {
+    bulkFeedback.innerHTML = `<span class="warn">没有识别到任何箱规。${errors.join('；')}</span>`;
+    return;
+  }
+  applyParsedBoxes(parsed);
+  bulkFeedback.innerHTML =
+    `<span class="ok">已填入 ${parsed.length} 箱：` +
+    parsed.map(b => `${b.length}×${b.width}×${b.height} / ${b.weight}kg`).join('；') +
+    `</span>` + (errors.length ? `<br><span class="warn">${errors.join('；')}</span>` : '');
+});
+
+btnBulkCalc.addEventListener('click', async () => {
+  const { parsed, errors } = parseBulkBoxes(bulkText.value);
+  if (!parsed.length) {
+    bulkFeedback.innerHTML = `<span class="warn">没有识别到任何箱规。${errors.join('；')}</span>`;
+    return;
+  }
+  applyParsedBoxes(parsed);
+  bulkFeedback.innerHTML =
+    `<span class="ok">已填入 ${parsed.length} 箱，开始计算…</span>` +
+    (errors.length ? `<br><span class="warn">${errors.join('；')}</span>` : '');
+  await runCalculate();
+});
+
 // ---------- 目的地 ----------
 function renderGroupOptions() {
   const current = groupSelect.value;
@@ -289,7 +395,8 @@ function renderResult(result) {
   }
 }
 
-btnCalc.addEventListener('click', async () => {
+// 收集当前输入并计算；批量导入后可直接复用
+async function runCalculate() {
   const group = currentGroupMeta();
   if (!group) return;
   const filled = getFilledBoxes();
@@ -315,7 +422,9 @@ btnCalc.addEventListener('click', async () => {
   } catch (err) {
     showToast(err.message || '计算失败');
   }
-});
+}
+
+btnCalc.addEventListener('click', runCalculate);
 
 // ---------- 价格管理 ----------
 function renderGroupTabs() {
@@ -778,6 +887,33 @@ btnReset.addEventListener('click', async () => {
   refreshData();
   switchGroup();
   showToast('已恢复默认数据');
+});
+
+// ---------- 配置导出 / 导入 ----------
+const btnExport = document.getElementById('btn-export');
+const btnImport = document.getElementById('btn-import');
+
+btnExport.addEventListener('click', async () => {
+  try {
+    const res = await api.exportConfig();
+    if (res.ok) showToast('配置已导出：' + res.filePath);
+  } catch (err) {
+    showToast(err.message || '导出失败');
+  }
+});
+
+btnImport.addEventListener('click', async () => {
+  if (!confirm('导入会覆盖当前所有价格、规则与起算重量，确定继续吗？')) return;
+  try {
+    const res = await api.importConfig();
+    if (!res.ok) return;
+    config = res.config;
+    refreshData();
+    switchGroup();
+    showToast('配置已导入：' + res.filePath);
+  } catch (err) {
+    showToast(err.message || '导入失败');
+  }
 });
 
 // ---------- 启动 ----------

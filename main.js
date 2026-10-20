@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const initSqlJs = require('sql.js');
@@ -736,6 +736,180 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// ---------- 配置导出 / 导入 ----------
+const CONFIG_FORMAT = 'freight-master-config';
+const CONFIG_VERSION = 1;
+
+// 组装可导出的完整配置（体积重系数 + 五个目的地的阶梯/地区行/单价/规则/起算重量）
+function buildExportPayload() {
+  return {
+    format: CONFIG_FORMAT,
+    version: CONFIG_VERSION,
+    exportedAt: new Date().toISOString(),
+    volDivisor: toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR),
+    groups: GROUP_META.map(meta => {
+      const cfg = getGroupConfig(meta.key);
+      return {
+        key: cfg.key,
+        name: cfg.name,
+        mode: cfg.mode,
+        minWeightSingle: toNum(cfg.minWeightSingle, meta.minWeightSingle),
+        minWeightPerBox: toNum(cfg.minWeightPerBox, meta.minWeightPerBox),
+        tiers: cfg.tiers.map(t => ({
+          id: t.id,
+          min_weight: toNum(t.min_weight, 0),
+          label: t.label || `${toNum(t.min_weight, 0)}KG+`,
+        })),
+        rows: cfg.rows.map(row => ({
+          id: row.id,
+          name: row.row_name,
+          matchKey: row.match_key || null,
+          prices: Object.keys(row.prices || {}).reduce((acc, tierId) => {
+            acc[tierId] = toNum(row.prices[tierId], 0);
+            return acc;
+          }, {}),
+        })),
+        rules: cfg.rules.map(r => ({
+          rule_group: r.rule_group,
+          field: r.field,
+          threshold: toNum(r.threshold, 0),
+          threshold_max:
+            r.threshold_max === '' || r.threshold_max === null || r.threshold_max === undefined
+              ? null
+              : toNum(r.threshold_max, null),
+          amount: toNum(r.amount, 0),
+          combine_mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
+          enabled: Number(r.enabled) === 1 ? 1 : 0,
+        })),
+      };
+    }),
+  };
+}
+
+// 先整份校验，通过后再落库，避免写一半失败留下脏数据
+function applyImportPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('配置文件格式不正确');
+  }
+  if (!Array.isArray(payload.groups) || !payload.groups.length) {
+    throw new Error('配置文件里没有找到目的地数据（groups 为空）');
+  }
+
+  const seen = new Set();
+  const plans = payload.groups.map(item => {
+    if (!item || typeof item !== 'object' || !item.key) {
+      throw new Error('存在缺少 key 的目的地配置');
+    }
+    const meta = GROUP_META.find(m => m.key === item.key);
+    if (!meta) throw new Error(`配置里有未知的目的地：${item.key}`);
+    if (seen.has(item.key)) throw new Error(`配置里目的地重复：${item.key}`);
+    seen.add(item.key);
+
+    const tiers = (Array.isArray(item.tiers) ? item.tiers : []).map(t => ({
+      id: toNum(t.id, 0) || 0,
+      min_weight: toNum(t.min_weight, 0),
+      label: t.label || `${toNum(t.min_weight, 0)}KG+`,
+    }));
+    if (!tiers.length) throw new Error(`「${meta.name}」缺少报价阶梯`);
+
+    const rows = (Array.isArray(item.rows) ? item.rows : []).map(r => {
+      const prices = {};
+      Object.keys(r.prices || {}).forEach(k => {
+        prices[k] = toNum(r.prices[k], 0);
+      });
+      return {
+        id: toNum(r.id, 0) || 0,
+        name: r.name || '未命名地区',
+        matchKey: r.matchKey || null,
+        prices,
+      };
+    });
+
+    const rules = (Array.isArray(item.rules) ? item.rules : []).map(r => ({
+      rule_group: r.rule_group || '规则',
+      field: FIELD_LABELS[r.field] ? r.field : 'weight',
+      threshold: toNum(r.threshold, 0),
+      threshold_max:
+        r.threshold_max === '' || r.threshold_max === null || r.threshold_max === undefined
+          ? null
+          : toNum(r.threshold_max, null),
+      amount: toNum(r.amount, 0),
+      combine_mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
+      enabled: r.enabled === undefined ? 1 : Number(r.enabled) === 1 ? 1 : 0,
+    }));
+
+    return {
+      key: meta.key,
+      name: meta.name,
+      mode: meta.mode,
+      minWeightSingle: toNum(item.minWeightSingle, meta.minWeightSingle),
+      minWeightPerBox: toNum(item.minWeightPerBox, meta.minWeightPerBox),
+      tiers,
+      rows,
+      rules,
+    };
+  });
+
+  plans.forEach(plan => {
+    db.run(`DELETE FROM rate_values WHERE row_id IN (SELECT id FROM rate_rows WHERE group_key = ?)`, [
+      plan.key,
+    ]);
+    db.run(`DELETE FROM rate_rows WHERE group_key = ?`, [plan.key]);
+    db.run(`DELETE FROM rate_tiers WHERE group_key = ?`, [plan.key]);
+    db.run(`DELETE FROM surcharge_rules WHERE group_key = ?`, [plan.key]);
+
+    // 保留导出文件里的 id，阶梯/单价的对应关系才不会错
+    const tierIdMap = {};
+    plan.tiers.forEach(t => {
+      const minWeight = toNum(t.min_weight, 0);
+      if (t.id) {
+        db.run(`INSERT INTO rate_tiers (id, group_key, min_weight, label) VALUES (?, ?, ?, ?)`, [
+          t.id,
+          plan.key,
+          minWeight,
+          t.label || `${minWeight}KG+`,
+        ]);
+      } else {
+        insertTier(plan.key, minWeight);
+      }
+      tierIdMap[t.id] = t.id || lastId();
+    });
+
+    plan.rows.forEach(row => {
+      let rowId;
+      if (row.id) {
+        db.run(`INSERT INTO rate_rows (id, group_key, row_name, match_key) VALUES (?, ?, ?, ?)`, [
+          row.id,
+          plan.key,
+          row.name,
+          row.matchKey,
+        ]);
+        rowId = row.id;
+      } else {
+        rowId = insertRateRow(plan.key, row.name, row.matchKey);
+      }
+      Object.keys(row.prices).forEach(oldTierId => {
+        const newTierId = tierIdMap[oldTierId];
+        if (newTierId) insertValue(rowId, newTierId, row.prices[oldTierId]);
+      });
+    });
+
+    plan.rules.forEach(rule => insertRule(plan.key, rule));
+
+    setSetting('min_weight_single_' + plan.key, plan.minWeightSingle);
+    setSetting('min_weight_per_box_' + plan.key, plan.minWeightPerBox);
+    // 标记已初始化，防止启动逻辑把导入的规则再覆盖掉
+    setSetting('seeded_' + plan.key, '1');
+    setSetting('rules_v2_' + plan.key, '1');
+  });
+
+  const volDivisor = toNum(payload.volDivisor, DEFAULT_VOL_DIVISOR);
+  if (volDivisor > 0) setSetting('vol_divisor', volDivisor);
+
+  saveDb();
+  return getConfig();
+}
+
 // ---------- 接口 ----------
 ipcMain.handle('get-config', () => getConfig());
 
@@ -815,5 +989,44 @@ ipcMain.handle('reset-database', () => {
   return true;
 });
 
+// 导出配置：弹保存对话框，写成 JSON
+ipcMain.handle('export-config', async () => {
+  const picked = await dialog.showSaveDialog({
+    title: '导出配置',
+    defaultPath: `freight-master-config-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: 'JSON 配置', extensions: ['json'] }],
+  });
+  if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+  fs.writeFileSync(picked.filePath, JSON.stringify(buildExportPayload(), null, 2), 'utf8');
+  return { ok: true, filePath: picked.filePath };
+});
+
+// 导入配置：弹打开对话框，读取 JSON 并整份覆盖
+ipcMain.handle('import-config', async () => {
+  const picked = await dialog.showOpenDialog({
+    title: '导入配置',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON 配置', extensions: ['json'] }],
+  });
+  if (picked.canceled || !picked.filePaths || !picked.filePaths.length) {
+    return { ok: false, canceled: true };
+  }
+  const raw = fs.readFileSync(picked.filePaths[0], 'utf8');
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    throw new Error('不是有效的 JSON 文件');
+  }
+  const config = applyImportPayload(payload);
+  return { ok: true, filePath: picked.filePaths[0], config };
+});
+
 // 供自动化测试调用（作为 Electron 入口运行时无副作用）
-module.exports = { calculateGroup, getConfig, saveGroupConfig };
+module.exports = {
+  calculateGroup,
+  getConfig,
+  saveGroupConfig,
+  buildExportPayload,
+  applyImportPayload,
+};

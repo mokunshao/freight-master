@@ -497,6 +497,52 @@ th input {
   width: 90px;
 }
 
+.bulk-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.bulk-box > .btn {
+  margin-right: 8px;
+}
+
+.bulk-panel {
+  margin-top: 10px;
+}
+
+.bulk-panel textarea {
+  width: 100%;
+  min-height: 110px;
+  padding: 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.bulk-panel .actions {
+  margin-top: 8px;
+}
+
+.bulk-panel .hint {
+  margin-top: 6px;
+}
+
+.bulk-panel .hint .ok {
+  color: #1a7f37;
+  font-weight: 600;
+}
+
+.bulk-panel .hint .warn {
+  color: #9a6700;
+  font-weight: 600;
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

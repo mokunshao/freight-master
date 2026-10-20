@@ -53,6 +53,20 @@
         </div>
         <div class="hint" id="box-hint">最多可添加 10 个箱规；每箱单独计算计费重（不低于该国起算重量）与附加费，最后自动汇总。</div>
 
+        <div class="bulk-box">
+          <button id="btn-bulk-toggle" class="btn btn-primary btn-sm">批量导入箱规</button>
+          <span class="hint">支持直接粘贴「重量32.60kg 尺寸：69*67*59」这类文本，一行一箱，自动识别填写。</span>
+          <div id="bulk-panel" class="bulk-panel" style="display:none;">
+            <textarea id="bulk-text" rows="6" placeholder="每行一箱，例如：&#10;重量32.60kg 尺寸：69*67*59&#10;重量21.50kg 尺寸：96*73*40&#10;或：32.6kg 69x67x59"></textarea>
+            <div class="actions">
+              <button id="btn-bulk-fill" class="btn btn-primary btn-sm">解析并填入</button>
+              <button id="btn-bulk-calc" class="btn btn-primary btn-sm">解析并计算</button>
+              <button id="btn-bulk-cancel" class="btn btn-danger btn-sm">取消</button>
+            </div>
+            <div id="bulk-feedback" class="hint"></div>
+          </div>
+        </div>
+
         <div class="actions">
           <button id="btn-add-box" class="btn btn-primary">+ 添加箱规</button>
           <button id="btn-clear-boxes" class="btn btn-danger">清空箱规</button>
@@ -109,6 +123,8 @@
         <div id="group-panels"></div>
 
         <div class="actions">
+          <button id="btn-export" class="btn btn-primary">导出配置</button>
+          <button id="btn-import" class="btn btn-primary">导入配置</button>
           <button id="btn-reset" class="btn btn-danger">恢复默认数据</button>
         </div>
       </section>
