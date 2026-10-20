@@ -29,12 +29,13 @@ const KIND_LABELS = {
 };
 
 // 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
+// 起算重量：单箱时按 minWeightSingle，多箱时每个箱按 minWeightPerBox
 const GROUP_META = [
-  { key: 'us', name: '美国', mode: 'zip', surchargeMode: 'stack' },
-  { key: 'eu', name: '欧洲', mode: 'country', surchargeMode: 'max' },
-  { key: 'ca', name: '加拿大', mode: 'country', surchargeMode: 'stack' },
-  { key: 'uk', name: '英国', mode: 'country', surchargeMode: 'stack' },
-  { key: 'au', name: '澳大利亚', mode: 'country', surchargeMode: 'stack' },
+  { key: 'us', name: '美国', mode: 'zip', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
+  { key: 'eu', name: '欧洲', mode: 'country', surchargeMode: 'max', minWeightSingle: 10, minWeightPerBox: 10 },
+  { key: 'ca', name: '加拿大', mode: 'country', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
+  { key: 'uk', name: '英国', mode: 'country', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
+  { key: 'au', name: '澳大利亚', mode: 'country', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
 ];
 
 // 出厂默认数据（新库写入，也用于“恢复默认数据”）
@@ -340,7 +341,25 @@ function ensureGroupData() {
       if (getRules(group.key).length === 0) data.rules.forEach(rule => insertRule(group.key, rule));
       setSetting('seeded_' + group.key, '1');
     }
+
+    // 起算重量：单箱起算 / 多箱每箱起算（缺失才写默认值）
+    if (getSetting('min_weight_single_' + group.key, null) === null) {
+      setSetting('min_weight_single_' + group.key, group.minWeightSingle);
+    }
+    if (getSetting('min_weight_per_box_' + group.key, null) === null) {
+      setSetting('min_weight_per_box_' + group.key, group.minWeightPerBox);
+    }
   });
+}
+
+// 最低计费重（起算）：只有一箱时用「单箱起算」，多箱时每个箱各按「多箱起算」
+function getMinWeight(groupKey, boxCount) {
+  const meta = GROUP_META.find(g => g.key === groupKey);
+  const isMulti = boxCount > 1;
+  const settingKey = 'min_weight_' + (isMulti ? 'per_box_' : 'single_') + groupKey;
+  const fallback = isMulti ? meta.minWeightPerBox : meta.minWeightSingle;
+  const value = toNum(getSetting(settingKey, fallback), fallback);
+  return value > 0 ? value : 0;
 }
 
 function seedData() {
@@ -443,6 +462,8 @@ function getGroupConfig(groupKey) {
   return {
     ...meta,
     surchargeMode: getSetting('surcharge_mode_' + groupKey, meta.surchargeMode),
+    minWeightSingle: toNum(getSetting('min_weight_single_' + groupKey, meta.minWeightSingle), meta.minWeightSingle),
+    minWeightPerBox: toNum(getSetting('min_weight_per_box_' + groupKey, meta.minWeightPerBox), meta.minWeightPerBox),
     tiers,
     rows: rows.map(row => ({
       ...row,
@@ -612,13 +633,13 @@ function calculateGroup(groupKey, selection, rawBoxes) {
 
   const tiers = getTiers(groupKey);
   if (!tiers.length) throw new Error(`「${meta.name}」还没有设置报价阶梯`);
-  const minWeight = toNum(tiers[0].min_weight, 0); // 起重 = 报价表第一栏
   const volDivisor = toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
   const mode = getSetting('surcharge_mode_' + groupKey, meta.surchargeMode);
   const rules = getRules(groupKey);
   const values = getRateValues(groupKey).filter(v => v.row_id === row.id);
 
   const boxes = normalizeBoxes(rawBoxes);
+  const minWeight = getMinWeight(groupKey, boxes.length); // 起算重量：一箱 / 多箱每箱
   const items = boxes.map((box, index) => {
     const m = measure(box.length, box.width, box.height, volDivisor);
     m.actualWeight = box.weight;
@@ -660,6 +681,9 @@ function calculateGroup(groupKey, selection, rawBoxes) {
     groupName: meta.name,
     destination: row.row_name,
     minWeight,
+    minWeightSingle: getMinWeight(groupKey, 1),
+    minWeightPerBox: getMinWeight(groupKey, 2),
+    minWeightMode: boxes.length > 1 ? 'per_box' : 'single',
     boxes: items,
     summary: {
       boxCount: items.length,
@@ -710,6 +734,14 @@ function saveGroupConfig(data) {
   if (!GROUP_META.some(g => g.key === key)) throw new Error('未知的目的地');
 
   setSetting('surcharge_mode_' + key, data.surchargeMode === 'max' ? 'max' : 'stack');
+
+  // 起算重量：一箱起算 / 多箱每箱起算
+  if (data.minWeightSingle !== undefined && data.minWeightSingle !== '') {
+    setSetting('min_weight_single_' + key, Math.max(0, toNum(data.minWeightSingle, 0)));
+  }
+  if (data.minWeightPerBox !== undefined && data.minWeightPerBox !== '') {
+    setSetting('min_weight_per_box_' + key, Math.max(0, toNum(data.minWeightPerBox, 0)));
+  }
 
   (data.tiers || []).forEach(tier => {
     const minWeight = toNum(tier.min_weight, 0);

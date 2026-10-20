@@ -204,7 +204,7 @@ function renderResult(result) {
       <div class="value">${s.boxCount} 箱</div>
     </div>
     <div class="result-item">
-      <div class="label">起重</div>
+      <div class="label">起算重量${result.minWeightMode === 'per_box' ? '（多箱 · 每箱）' : '（一箱）'}</div>
       <div class="value">${result.minWeight} kg</div>
     </div>
     <div class="result-item">
@@ -331,6 +331,19 @@ function rateTableHtml(group) {
   );
 
   return `
+    <div class="section-title">${group.name} · 起算重量（最低计费重）</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>一箱起算</label>
+        <input type="number" step="0.1" min="0" data-field="minWeightSingle" value="${group.minWeightSingle}">
+        <div class="hint">KG，只填 1 个箱时按这个数保底</div>
+      </div>
+      <div class="form-group">
+        <label>多箱起算（每个箱）</label>
+        <input type="number" step="0.1" min="0" data-field="minWeightPerBox" value="${group.minWeightPerBox}">
+        <div class="hint">KG，填 2 个及以上箱时，每个箱各按这个数保底</div>
+      </div>
+    </div>
     <div class="section-title">${group.name} · 单价表</div>
     ${placeholder ? '<div class="warn">该目的地存在单价为 0 的行，请填写实际报价后再计算。</div>' : ''}
     <div class="table-wrap">
@@ -486,6 +499,12 @@ function handleDataInput(e) {
     return;
   }
 
+  // 起算重量（一箱 / 多箱每箱）
+  if (field === 'minWeightSingle' || field === 'minWeightPerBox') {
+    group[field] = e.target.value === '' ? 0 : Number(e.target.value);
+    return;
+  }
+
   const ruleTr = e.target.closest('[data-rule]');
   if (ruleTr) {
     const rule = group.rules[Number(ruleTr.dataset.rule)];
@@ -514,6 +533,8 @@ function collectGroup(group) {
   return {
     groupKey: group.key,
     surchargeMode: group.surchargeMode,
+    minWeightSingle: Number(group.minWeightSingle),
+    minWeightPerBox: Number(group.minWeightPerBox),
     tiers: group.tiers.map(t => ({ id: t.id, min_weight: Number(t.min_weight) })),
     rows: group.rows.map(row => ({
       id: row.id,
