@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "serve": "node server.mjs",
     "pack": "node scripts/pack.mjs",
     "build": "node scripts/pack.mjs"
   },

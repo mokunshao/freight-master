@@ -158,8 +158,25 @@
 ```bash
 cd freight-master
 npm install
-npm start
+npm start          # 桌面端（Electron）
 ```
+
+### 局域网开发服务（让同事用浏览器直接访问）
+
+```bash
+npm run serve                       # 默认监听 0.0.0.0:5173
+node server.mjs --port 8080         # 换端口
+node server.mjs --db ./other.db     # 换数据库文件
+```
+
+启动后终端会打印内网地址（如 `http://192.168.1.23:5173`），同事用浏览器打开即可，页面与桌面端完全一致（同一份 `renderer.js` + `core.js`）。
+
+注意：
+
+- **仅限局域网开发联调**：服务没有登录鉴权，不要直接暴露到公网
+- 同事打不开时先排查：Windows 防火墙是否放行该端口、公司 Wi-Fi 是否开了 AP 隔离（可让同事先 `ping` 你的内网 IP）
+- 数据库是单文件写盘，**多人同时改价格会互相覆盖**（最后写入胜出）；正式多人使用需要加锁或改成服务端单一写入
+- 浏览器模式下「导出配置」变成直接下载 JSON 文件，「导入配置」变成选择本地 JSON 文件（没有原生对话框）
 
 ### 打包成绿色版
 
@@ -175,8 +192,9 @@ npm run build
 
 首次运行会在程序目录生成 `freight-master.db`，即为 SQLite 数据库文件：
 
-- 开发模式：项目根目录下的 `freight-master.db`
+- 桌面端开发模式：项目根目录下的 `freight-master.db`
 - 打包后：`运费大师.exe` 同级的 `freight-master.db`
+- 局域网服务：默认同样是项目根目录，可用 `--db` 指定别的位置
 
 价格与规则修改都会自动保存到该文件，复制该文件即可迁移数据。数据库包含 5 张表：
 
@@ -195,4 +213,16 @@ npm run build
 - Electron 33
 - @electron/packager 20（Electron 官方打包器）
 - sql.js（SQLite 纯 JS 实现，无需额外编译）
+- 局域网开发服务：`node:http` 零依赖实现
 - 原生 HTML / CSS / JavaScript
+
+## 代码结构
+
+| 文件 | 作用 |
+| --- | --- |
+| `core.js` | 数据库、运费计算、配置导入导出（纯 Node，无 Electron 依赖） |
+| `main.js` | Electron 桌面端入口：窗口 + IPC 桥接 |
+| `preload.js` | 桌面端把 IPC 暴露成 `window.freightApi` |
+| `server.mjs` | 局域网开发服务：静态托管 + `/api/*` 路由 |
+| `web-api.js` | 浏览器端用 fetch 实现同名 `window.freightApi`（Electron 下自动跳过） |
+| `renderer.js` / `index.html` / `styles.css` | 页面，桌面端与浏览器端共用 |
