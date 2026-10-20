@@ -2,15 +2,62 @@ const api = window.freightApi;
 
 const MAX_BOXES = 10;
 
-const FIELD_LABELS = {
-  weight: '实重 (KG)',
-  charged_weight: '计费重 (KG)',
-  girth: '围长 (CM)',
-  longest: '最长边 (CM)',
-  second_longest: '次长边 (CM)',
-  shortest: '最短边 (CM)',
-  volume: '体积 (CM³)',
-};
+// 条件字段分两级：主字段（类别）+ 次级字段（真正参与比较的值）
+// 没有次级字段的类别（围长 / 体积）直接拿主字段当存储值
+const FIELD_GROUPS = [
+  {
+    key: 'side',
+    name: '边长',
+    unit: 'CM',
+    fields: [
+      { key: 'longest', label: '最长边' },
+      { key: 'second_longest', label: '次长边' },
+      { key: 'shortest', label: '最短边' },
+    ],
+  },
+  {
+    key: 'weight',
+    name: '重量',
+    unit: 'KG',
+    fields: [
+      { key: 'charged_weight', label: '计费重（材积重）' },
+      { key: 'weight', label: '实重' },
+    ],
+  },
+  { key: 'girth', name: '围长', unit: 'CM', fields: null },
+  { key: 'volume', name: '体积', unit: 'CM³', fields: null },
+];
+
+// 叶子字段 → 完整标签（规则组合区展示用）
+const FIELD_LABELS = FIELD_GROUPS.reduce((acc, g) => {
+  if (!g.fields) {
+    acc[g.key] = `${g.name} (${g.unit})`;
+    return acc;
+  }
+  g.fields.forEach(f => {
+    acc[f.key] = `${f.label} (${g.unit})`;
+  });
+  return acc;
+}, {});
+
+// 叶子字段属于哪个主字段
+function fieldGroupOf(field) {
+  return (
+    FIELD_GROUPS.find(g => (g.fields ? g.fields.some(f => f.key === field) : g.key === field)) ||
+    FIELD_GROUPS[0]
+  );
+}
+
+// 次级字段下拉：没有次级字段时禁用
+function subFieldOptions(rule) {
+  const group = fieldGroupOf(rule.field);
+  if (!group.fields) {
+    return '<select data-field="field_sub" disabled><option value="">—</option></select>';
+  }
+  return `<select data-field="field_sub">${group.fields
+    .map(f => `<option value="${f.key}" ${rule.field === f.key ? 'selected' : ''}>${f.label}</option>`)
+    .join('')}</select>`;
+}
 
 // 附加费行为：逐条规则配置，取代原来的「类型 + 国家级叠加方式」
 const COMBINE_MODE_LABELS = {
@@ -523,14 +570,15 @@ function ruleTableHtml(group) {
       <table>
         <thead>
           <tr>
-            <th style="width:60px">序号</th>
-            <th style="width:140px">规则组</th>
-            <th style="width:150px">条件字段</th>
-            <th style="width:110px">下限（≥）</th>
-            <th style="width:110px">上限（&lt;）</th>
-            <th style="width:110px">金额（元）</th>
-            <th style="width:70px">启用</th>
-            <th style="width:90px">操作</th>
+            <th style="width:56px">序号</th>
+            <th style="width:130px">规则组</th>
+            <th style="width:100px">条件字段</th>
+            <th style="width:130px">次级字段</th>
+            <th style="width:100px">下限（≥）</th>
+            <th style="width:100px">上限（&lt;）</th>
+            <th style="width:100px">金额（元）</th>
+            <th style="width:60px">启用</th>
+            <th style="width:80px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -541,15 +589,14 @@ function ruleTableHtml(group) {
               <td class="seq">#${i + 1}</td>
               <td><input type="text" data-field="rule_group" value="${escapeAttr(rule.rule_group)}"></td>
               <td>
-                <select data-field="field">
-                  ${Object.keys(FIELD_LABELS)
-                    .map(
-                      f =>
-                        `<option value="${f}" ${rule.field === f ? 'selected' : ''}>${FIELD_LABELS[f]}</option>`
-                    )
-                    .join('')}
+                <select data-field="field_main">
+                  ${FIELD_GROUPS.map(
+                    g =>
+                      `<option value="${g.key}" ${fieldGroupOf(rule.field).key === g.key ? 'selected' : ''}>${g.name}</option>`
+                  ).join('')}
                 </select>
               </td>
+              <td>${subFieldOptions(rule)}</td>
               <td><input type="number" step="0.1" data-field="threshold" value="${rule.threshold}"></td>
               <td><input type="number" step="0.1" data-field="threshold_max" placeholder="不限" value="${
                 rule.threshold_max === null || rule.threshold_max === undefined ? '' : rule.threshold_max
@@ -564,7 +611,7 @@ function ruleTableHtml(group) {
           ${
             group.rules.length
               ? ''
-              : '<tr><td colspan="8" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
+              : '<tr><td colspan="9" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
           }
         </tbody>
       </table>
@@ -746,6 +793,17 @@ function handleDataInput(e) {
   if (ruleTr) {
     const rule = group.rules[Number(ruleTr.dataset.rule)];
     if (!rule) return;
+    // 主字段切换：次级字段跟着换，默认取该类别的第一项（无次级字段时直接用主字段）
+    if (field === 'field_main') {
+      const picked = FIELD_GROUPS.find(g => g.key === e.target.value);
+      if (picked) rule.field = picked.fields ? picked.fields[0].key : picked.key;
+      renderGroupPanel();
+      return;
+    }
+    if (field === 'field_sub') {
+      if (e.target.value) rule.field = e.target.value;
+      return;
+    }
     if (field === 'enabled') rule[field] = e.target.checked ? 1 : 0;
     else if (field === 'threshold' || field === 'amount') rule[field] = Number(e.target.value);
     else if (field === 'threshold_max') rule[field] = e.target.value === '' ? null : Number(e.target.value);

@@ -4,16 +4,41 @@ const fs = require('fs');
 
 const DEFAULT_VOL_DIVISOR = 6000;
 
-// 附加费可判断的字段
-const FIELD_LABELS = {
-  weight: '实重 (KG)',
-  charged_weight: '计费重 (KG)',
-  girth: '围长 (CM)',
-  longest: '最长边 (CM)',
-  second_longest: '次长边 (CM)',
-  shortest: '最短边 (CM)',
-  volume: '体积 (CM³)',
-};
+// 附加费可判断的字段（叶子字段，UI 里按「主字段 + 次级字段」两级选择后存这里）
+const FIELD_GROUPS = [
+  {
+    key: 'side',
+    name: '边长',
+    unit: 'CM',
+    fields: [
+      { key: 'longest', label: '最长边' },
+      { key: 'second_longest', label: '次长边' },
+      { key: 'shortest', label: '最短边' },
+    ],
+  },
+  {
+    key: 'weight',
+    name: '重量',
+    unit: 'KG',
+    fields: [
+      { key: 'charged_weight', label: '计费重（材积重）' },
+      { key: 'weight', label: '实重' },
+    ],
+  },
+  { key: 'girth', name: '围长', unit: 'CM', fields: null },
+  { key: 'volume', name: '体积', unit: 'CM³', fields: null },
+];
+
+const FIELD_LABELS = FIELD_GROUPS.reduce((acc, g) => {
+  if (!g.fields) {
+    acc[g.key] = `${g.name} (${g.unit})`;
+    return acc;
+  }
+  g.fields.forEach(f => {
+    acc[f.key] = `${f.label} (${g.unit})`;
+  });
+  return acc;
+}, {});
 
 // 附加费行为（6 种，可逐条规则配置）
 const COMBINE_MODE_LABELS = {
@@ -964,6 +989,7 @@ function applyImportPayload(payload) {
 module.exports = {
   initCore,
   DEFAULT_VOL_DIVISOR,
+  FIELD_GROUPS,
   FIELD_LABELS,
   COMBINE_MODE_LABELS,
   GROUP_META,
