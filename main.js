@@ -20,12 +20,14 @@ const FIELD_LABELS = {
   volume: '体积 (CM³)',
 };
 
-// 规则类型
-const KIND_LABELS = {
-  fee: '附加费（可叠加）',
-  oversize: '附加费（超大件，命中后不叠加其他附加费）',
-  reject: '达到即不收货',
-  notice: '仅提醒（不收费）',
+// 附加费行为（6 种，可逐条规则配置）
+const COMBINE_MODE_LABELS = {
+  add: '叠加（与其他 叠加 组求和）',
+  not_stack: '不叠加（自身累加，但不会让 叠加 组失效）',
+  max: '不叠加取最大值（命中时只收本类最高，叠加组全部不收）',
+  cardispatch: '卡派（卡车派送费，独立累加，不受 max 影响）',
+  notice: '提醒（不收钱，仅提示）',
+  reject: '拒收（达到即不收货，结算时直接报错）',
 };
 
 // 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
@@ -48,13 +50,13 @@ const DEFAULT_DATA = {
       { name: '美东（邮编0,1,2,3开头）', matchKey: '0,1,2,3', prices: [18.7, 17.2, 15.2, 14.2] },
     ],
     rules: [
-      { rule_group: '实重', field: 'weight', threshold: 22.5, amount: 120, exclusive: 0, enabled: 1 },
-      { rule_group: '围长', field: 'girth', threshold: 265, amount: 120, exclusive: 0, enabled: 1 },
-      { rule_group: '单边', field: 'longest', threshold: 120, amount: 120, exclusive: 0, enabled: 1 },
-      { rule_group: '单边', field: 'second_longest', threshold: 75, amount: 120, exclusive: 0, enabled: 1 },
-      { rule_group: '超大件', field: 'girth', threshold: 330, amount: 500, exclusive: 1, enabled: 1 },
-      { rule_group: '超大件', field: 'volume', threshold: 283168, amount: 500, exclusive: 1, enabled: 1 },
-      { rule_group: '超大件', field: 'weight', threshold: 50, amount: 500, exclusive: 1, enabled: 1 },
+      { rule_group: '实重', field: 'weight', threshold: 22.5, amount: 120, combine_mode: 'add', enabled: 1 },
+      { rule_group: '围长', field: 'girth', threshold: 265, amount: 120, combine_mode: 'add', enabled: 1 },
+      { rule_group: '单边', field: 'longest', threshold: 120, amount: 120, combine_mode: 'add', enabled: 1 },
+      { rule_group: '单边', field: 'second_longest', threshold: 75, amount: 120, combine_mode: 'add', enabled: 1 },
+      { rule_group: '超大件', field: 'girth', threshold: 330, amount: 500, combine_mode: 'max', enabled: 1 },
+      { rule_group: '超大件', field: 'volume', threshold: 283168, amount: 500, combine_mode: 'max', enabled: 1 },
+      { rule_group: '超大件', field: 'weight', threshold: 50, amount: 500, combine_mode: 'max', enabled: 1 },
     ],
   },
   eu: {
@@ -65,53 +67,51 @@ const DEFAULT_DATA = {
       { name: 'Czech Republic, Slovakia, Austria, Hungary 捷克、斯洛伐克、奥地利、匈牙利', prices: [18.0, 18.0, 17.5] },
       { name: 'France 法国', prices: [18.5, 18.0, 17.0] },
       { name: 'Netherlands, Denmark, Estonia, Lithuania, Monaco, Latvia, Spain(except islands), Italy(except islands) 荷兰、丹麦、爱沙尼亚、立陶宛、摩纳哥、拉脱维亚、西班牙(岛屿除外)、意大利(岛屿除外)', prices: [19.0, 19.0, 18.0] },
-      { name: 'Slovenia, Croatia, Finland, Sweden, Bulgaria 斯洛文尼亚、克罗地亚、芬兰、瑞典、保加利亚', prices: [19.5, 19.0, 19.0] },
+      { name: 'Slovenia, Croatia, Finland, Sweden, Bulgaria 斯洛文利亚、克罗地亚、芬兰、瑞典、保加利亚', prices: [19.5, 19.0, 19.0] },
       { name: 'Greece, Ireland, Portugal 希腊、爱尔兰、葡萄牙', prices: [21.0, 21.0, 20.0] },
     ],
     rules: [
-      { rule_group: '围长330', field: 'girth', threshold: 330, amount: 350, exclusive: 0, enabled: 1 },
-      { rule_group: '围长300', field: 'girth', threshold: 300, amount: 300, exclusive: 0, enabled: 1 },
-      { rule_group: '实重30', field: 'weight', threshold: 30, amount: 300, exclusive: 0, enabled: 1 },
+      { rule_group: '围长330', field: 'girth', threshold: 330, amount: 350, combine_mode: 'max', enabled: 1 },
+      { rule_group: '围长300', field: 'girth', threshold: 300, amount: 300, combine_mode: 'max', enabled: 1 },
+      { rule_group: '实重30', field: 'weight', threshold: 30, amount: 300, combine_mode: 'max', enabled: 1 },
     ],
   },
-  // 以下三个目的地暂无官方报价，单价先置 0 占位，请在「价格管理」里填写
   ca: {
     tiers: [10, 21, 101],
     rows: [{ name: '加拿大 Canada', prices: [0, 0, 0] }],
     rules: [
-      { rule_group: '①实重', field: 'weight', threshold: 22, amount: 130 },
-      { rule_group: '②单边', field: 'longest', threshold: 121, amount: 130 },
-      { rule_group: '②单边', field: 'second_longest', threshold: 75, amount: 130 },
-      { rule_group: '③围长', field: 'girth', threshold: 265, amount: 130 },
-      { rule_group: '④超大件', field: 'girth', threshold: 320, amount: 700, kind: 'oversize' },
-      { rule_group: '④超大件', field: 'weight', threshold: 40, amount: 700, kind: 'oversize' },
-      { rule_group: '⑤不收货', field: 'weight', threshold: 68, amount: 0, kind: 'reject' },
-      { rule_group: '⑤不收货', field: 'longest', threshold: 151, amount: 0, kind: 'reject' },
-      { rule_group: '⑤不收货', field: 'girth', threshold: 400, amount: 0, kind: 'reject' },
+      { rule_group: '①实重', field: 'weight', threshold: 22, amount: 130, combine_mode: 'add' },
+      { rule_group: '②单边', field: 'longest', threshold: 121, amount: 130, combine_mode: 'add' },
+      { rule_group: '②单边', field: 'second_longest', threshold: 75, amount: 130, combine_mode: 'add' },
+      { rule_group: '③围长', field: 'girth', threshold: 265, amount: 130, combine_mode: 'add' },
+      { rule_group: '④超大件', field: 'girth', threshold: 320, amount: 700, combine_mode: 'max' },
+      { rule_group: '④超大件', field: 'weight', threshold: 40, amount: 700, combine_mode: 'max' },
+      { rule_group: '⑤不收货', field: 'weight', threshold: 68, amount: 0, combine_mode: 'reject' },
+      { rule_group: '⑤不收货', field: 'longest', threshold: 151, amount: 0, combine_mode: 'reject' },
+      { rule_group: '⑤不收货', field: 'girth', threshold: 400, amount: 0, combine_mode: 'reject' },
     ],
   },
   uk: {
     tiers: [10, 21, 101],
     rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }],
     rules: [
-      { rule_group: '①实重30-40', field: 'weight', threshold: 30, threshold_max: 40, amount: 330 },
-      // ②和③互不叠加 → 放同一规则组（组内满足任一条件只收一次）
-      { rule_group: '②③尺寸', field: 'longest', threshold: 100, threshold_max: 150, amount: 300 },
-      { rule_group: '②③尺寸', field: 'second_longest', threshold: 70, threshold_max: 100, amount: 300 },
-      { rule_group: '②③尺寸', field: 'shortest', threshold: 60, threshold_max: 100, amount: 300 },
-      { rule_group: '②③尺寸', field: 'girth', threshold: 300, threshold_max: 400, amount: 300 },
+      { rule_group: '①实重30-40', field: 'weight', threshold: 30, threshold_max: 40, amount: 330, combine_mode: 'add' },
+      { rule_group: '②③尺寸', field: 'longest', threshold: 100, threshold_max: 150, amount: 300, combine_mode: 'add' },
+      { rule_group: '②③尺寸', field: 'second_longest', threshold: 70, threshold_max: 100, amount: 300, combine_mode: 'add' },
+      { rule_group: '②③尺寸', field: 'shortest', threshold: 60, threshold_max: 100, amount: 300, combine_mode: 'add' },
+      { rule_group: '②③尺寸', field: 'girth', threshold: 300, threshold_max: 400, amount: 300, combine_mode: 'add' },
     ],
   },
   au: {
     tiers: [10, 21, 101],
     rows: [{ name: '澳大利亚 Australia', prices: [0, 0, 0] }],
     rules: [
-      { rule_group: '计费重≥30', field: 'charged_weight', threshold: 30, threshold_max: 35, amount: 100 },
-      { rule_group: '计费重≥35', field: 'charged_weight', threshold: 35, threshold_max: 80, amount: 300 },
-      { rule_group: '计费重≥80', field: 'charged_weight', threshold: 80, amount: 300 },
-      { rule_group: '单边120-199', field: 'longest', threshold: 120, threshold_max: 200, amount: 100 },
-      { rule_group: '单边200-299', field: 'longest', threshold: 200, threshold_max: 300, amount: 200 },
-      { rule_group: '木托盘提醒', field: 'weight', threshold: 30, amount: 0, kind: 'notice' },
+      { rule_group: '计费重≥30', field: 'charged_weight', threshold: 30, threshold_max: 35, amount: 100, combine_mode: 'add' },
+      { rule_group: '计费重≥35', field: 'charged_weight', threshold: 35, threshold_max: 80, amount: 300, combine_mode: 'add' },
+      { rule_group: '计费重≥80', field: 'charged_weight', threshold: 80, amount: 300, combine_mode: 'add' },
+      { rule_group: '单边120-199', field: 'longest', threshold: 120, threshold_max: 200, amount: 100, combine_mode: 'add' },
+      { rule_group: '单边200-299', field: 'longest', threshold: 200, threshold_max: 300, amount: 200, combine_mode: 'add' },
+      { rule_group: '木托盘提醒', field: 'weight', threshold: 30, amount: 0, combine_mode: 'notice' },
     ],
   },
 };
@@ -230,19 +230,30 @@ function ensureSchema() {
       threshold REAL NOT NULL,
       threshold_max REAL,
       amount REAL NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'fee',
-      exclusive INTEGER NOT NULL DEFAULT 0,
+      combine_mode TEXT NOT NULL DEFAULT 'add',
       enabled INTEGER NOT NULL DEFAULT 1
     );`);
   } else {
-    // 旧版表升级：补上限列与规则类型列
+    // 旧库升级：补上限列，再把 kind / exclusive + 国家级叠加方式迁移成 combine_mode
     const cols = db.exec('PRAGMA table_info(surcharge_rules)')[0].values.map(v => v[1]);
     if (!cols.includes('threshold_max')) {
       db.run(`ALTER TABLE surcharge_rules ADD COLUMN threshold_max REAL`);
     }
-    if (!cols.includes('kind')) {
-      db.run(`ALTER TABLE surcharge_rules ADD COLUMN kind TEXT NOT NULL DEFAULT 'fee'`);
-      db.run(`UPDATE surcharge_rules SET kind = CASE WHEN exclusive = 1 THEN 'oversize' ELSE 'fee' END`);
+    if (!cols.includes('combine_mode')) {
+      db.run(`ALTER TABLE surcharge_rules ADD COLUMN combine_mode TEXT NOT NULL DEFAULT 'add'`);
+      GROUP_META.forEach(group => {
+        const legacyMode = getSetting('surcharge_mode_' + group.key, group.surchargeMode);
+        rowsToObjects(
+          db.exec(`SELECT id, kind, exclusive FROM surcharge_rules WHERE group_key = '${group.key}'`)
+        ).forEach(r => {
+          let mode = 'add';
+          if (r.kind === 'reject') mode = 'reject';
+          else if (r.kind === 'notice') mode = 'notice';
+          else if (r.kind === 'oversize' || Number(r.exclusive) === 1) mode = 'max';
+          else if (legacyMode === 'max') mode = 'max';
+          db.run(`UPDATE surcharge_rules SET combine_mode = ? WHERE id = ?`, [mode, r.id]);
+        });
+      });
     }
   }
 }
@@ -279,15 +290,14 @@ function insertValue(rowId, tierId, price) {
 }
 
 function insertRule(groupKey, rule) {
-  let kind = rule.kind;
-  if (!KIND_LABELS[kind]) kind = Number(rule.exclusive) === 1 ? 'oversize' : 'fee';
+  const combineMode = COMBINE_MODE_LABELS[rule.combine_mode] ? rule.combine_mode : 'add';
   const thresholdMax =
     rule.threshold_max === '' || rule.threshold_max === null || rule.threshold_max === undefined
       ? null
       : toNum(rule.threshold_max, null);
   db.run(
-    `INSERT INTO surcharge_rules (group_key, rule_group, field, threshold, threshold_max, amount, kind, exclusive, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO surcharge_rules (group_key, rule_group, field, threshold, threshold_max, amount, combine_mode, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       groupKey,
       rule.rule_group || '规则',
@@ -295,8 +305,7 @@ function insertRule(groupKey, rule) {
       toNum(rule.threshold, 0),
       thresholdMax,
       toNum(rule.amount, 0),
-      kind,
-      kind === 'oversize' ? 1 : 0,
+      combineMode,
       rule.enabled === undefined ? 1 : Number(rule.enabled) === 1 ? 1 : 0,
     ]
   );
@@ -364,7 +373,6 @@ function getMinWeight(groupKey, boxCount) {
 
 function seedData() {
   setSetting('vol_divisor', DEFAULT_VOL_DIVISOR);
-  GROUP_META.forEach(group => setSetting('surcharge_mode_' + group.key, group.surchargeMode));
   ensureTiers();
   ensureGroupData();
 }
@@ -420,11 +428,6 @@ function migrateLegacy() {
   if (!db.exec(`SELECT value FROM settings WHERE key = 'vol_divisor'`).length) {
     setSetting('vol_divisor', DEFAULT_VOL_DIVISOR);
   }
-  GROUP_META.forEach(group => {
-    if (!db.exec(`SELECT value FROM settings WHERE key = 'surcharge_mode_${group.key}'`).length) {
-      setSetting('surcharge_mode_' + group.key, group.surchargeMode);
-    }
-  });
 }
 
 // ---------- 查询 ----------
@@ -450,7 +453,10 @@ function getRateValues(groupKey) {
 
 function getRules(groupKey) {
   return rowsToObjects(
-    db.exec(`SELECT * FROM surcharge_rules WHERE group_key = '${groupKey}' ORDER BY id ASC`)
+    db.exec(
+      `SELECT id, group_key, rule_group, field, threshold, threshold_max, amount, combine_mode, enabled
+       FROM surcharge_rules WHERE group_key = '${groupKey}' ORDER BY id ASC`
+    )
   );
 }
 
@@ -461,7 +467,6 @@ function getGroupConfig(groupKey) {
   const values = getRateValues(groupKey);
   return {
     ...meta,
-    surchargeMode: getSetting('surcharge_mode_' + groupKey, meta.surchargeMode),
     minWeightSingle: toNum(getSetting('min_weight_single_' + groupKey, meta.minWeightSingle), meta.minWeightSingle),
     minWeightPerBox: toNum(getSetting('min_weight_per_box_' + groupKey, meta.minWeightPerBox), meta.minWeightPerBox),
     tiers,
@@ -524,8 +529,18 @@ function formatRange(rule) {
   return max !== null && max !== undefined && max !== '' ? `≥${rule.threshold} 且 <${max}` : `≥${rule.threshold}`;
 }
 
-// 规则组内满足任一条件只收一次（取组内最高金额）；规则组之间按模式叠加或取最高
-function calculateSurcharge(m, rules, mode) {
+// 取一条规则的行为（兼容旧数据：kind=oversize → max、kind=notice/reject → 自身）
+function ruleMode(rule) {
+  if (rule.combine_mode && COMBINE_MODE_LABELS[rule.combine_mode]) return rule.combine_mode;
+  if (rule.kind === 'oversize') return 'max';
+  if (rule.kind === 'notice') return 'notice';
+  if (rule.kind === 'reject') return 'reject';
+  return 'add';
+}
+
+// 附加费计算：完全由每条规则的「行为」（combine_mode）驱动
+// 叠加 / 不叠加 组：各自组内取最高、组间求和；命中「不叠加取最大值」组时只收该类最高，其余不收；卡派独立累加
+function calculateSurcharge(m, rules) {
   const fields = {
     weight: m.actualWeight,
     charged_weight: m.chargedWeight,
@@ -537,13 +552,14 @@ function calculateSurcharge(m, rules, mode) {
   };
 
   const enabled = rules.filter(r => Number(r.enabled) === 1);
+  const note = rule => `${rule.rule_group}：${FIELD_LABELS[rule.field] || rule.field} ${formatRange(rule)}`;
 
-  // 达到即不收货
-  const rejected = enabled.find(r => (r.kind || 'fee') === 'reject' && ruleMatches(r, fields));
+  // 拒收：命中任意一条即不收货
+  const rejected = enabled.find(r => ruleMode(r) === 'reject' && ruleMatches(r, fields));
   if (rejected) {
     return {
       rejected: true,
-      rejectReason: `${rejected.rule_group}：${FIELD_LABELS[rejected.field] || rejected.field} ${formatRange(rejected)}，当前值 ${fields[rejected.field]}`,
+      rejectReason: `${note(rejected)}，当前值 ${fields[rejected.field]}`,
       surcharge: 0,
       detail: [],
     };
@@ -551,54 +567,53 @@ function calculateSurcharge(m, rules, mode) {
 
   const detail = [];
 
-  // 仅提醒（不收费）
+  // 提醒：不收费
   enabled
-    .filter(r => r.kind === 'notice' && ruleMatches(r, fields))
+    .filter(r => ruleMode(r) === 'notice' && ruleMatches(r, fields))
     .forEach(r => {
-      detail.push(`提醒：${r.rule_group}（${FIELD_LABELS[r.field] || r.field} ${formatRange(r)}，当前值 ${fields[r.field]}）`);
+      detail.push(`提醒：${note(r)}，当前值 ${fields[r.field]}`);
     });
 
-  const matched = {};
-  enabled
-    .filter(r => {
-      const kind = r.kind || 'fee';
-      return kind === 'fee' || kind === 'oversize';
-    })
-    .forEach(r => {
-      if (!ruleMatches(r, fields)) return;
-      const amount = toNum(r.amount, 0);
-      const current = matched[r.rule_group];
-      if (!current || amount > current.amount) {
-        matched[r.rule_group] = {
-          amount,
-          exclusive: r.kind === 'oversize',
-          detail: `${r.rule_group}：${FIELD_LABELS[r.field] || r.field} ${formatRange(r)} → +${amount} 元`,
-        };
-      }
-    });
+  // 组内满足任一条件只收一次（取组内最高），行为相同的组之间再按规则合并
+  const groupsOf = mode => {
+    const matched = {};
+    enabled
+      .filter(r => ruleMode(r) === mode && ruleMatches(r, fields))
+      .forEach(r => {
+        const amount = toNum(r.amount, 0);
+        const current = matched[r.rule_group];
+        if (!current || amount > current.amount) {
+          matched[r.rule_group] = { amount, rule: r };
+        }
+      });
+    return Object.values(matched);
+  };
 
-  const groups = Object.values(matched);
-  if (groups.length) {
-    if (mode === 'max') {
-      const best = groups.reduce((a, b) => (b.amount > a.amount ? b : a));
-      return { rejected: false, surcharge: best.amount, detail: [...detail, best.detail] };
-    }
+  const sum = list => round2(list.reduce((acc, g) => acc + g.amount, 0));
+  const describe = list => list.map(g => `${note(g.rule)} → +${g.amount} 元`);
 
-    const exclusive = groups.filter(g => g.exclusive);
-    if (exclusive.length) {
-      // 命中超大件：只收超大件，其他附加费不再叠加
-      const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
-      return { rejected: false, surcharge: best.amount, detail: [...detail, best.detail] };
-    }
+  // 卡派：独立累加，永远不受「不叠加取最大值」影响
+  const dispatch = groupsOf('cardispatch');
 
+  // 不叠加取最大值：命中即替换掉所有 叠加 / 不叠加 组
+  const exclusive = groupsOf('max');
+  if (exclusive.length) {
+    const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
+    detail.push(`不叠加取最高：${note(best.rule)} → +${best.amount} 元`);
     return {
       rejected: false,
-      surcharge: groups.reduce((sum, g) => sum + g.amount, 0),
-      detail: [...detail, ...groups.map(g => g.detail)],
+      surcharge: round2(best.amount + sum(dispatch)),
+      detail: [...detail, ...describe(dispatch)],
     };
   }
 
-  return { rejected: false, surcharge: 0, detail };
+  const add = groupsOf('add');
+  const notStack = groupsOf('not_stack');
+  return {
+    rejected: false,
+    surcharge: round2(sum(add) + sum(notStack) + sum(dispatch)),
+    detail: [...detail, ...describe(add), ...describe(notStack), ...describe(dispatch)],
+  };
 }
 
 function normalizeBoxes(boxes) {
@@ -634,7 +649,6 @@ function calculateGroup(groupKey, selection, rawBoxes) {
   const tiers = getTiers(groupKey);
   if (!tiers.length) throw new Error(`「${meta.name}」还没有设置报价阶梯`);
   const volDivisor = toNum(getSetting('vol_divisor', DEFAULT_VOL_DIVISOR), DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
-  const mode = getSetting('surcharge_mode_' + groupKey, meta.surchargeMode);
   const rules = getRules(groupKey);
   const values = getRateValues(groupKey).filter(v => v.row_id === row.id);
 
@@ -652,7 +666,7 @@ function calculateGroup(groupKey, selection, rawBoxes) {
     const baseFreight = chargedWeight * unitPrice;
     m.chargedWeight = chargedWeight;
 
-    const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, rules, mode);
+    const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, rules);
     if (rejected) {
       throw new Error(
         `第 ${index + 1} 箱超出「${meta.name}」承运范围，不收货 —— ${rejectReason}。请调整该箱或联系货代确认。`
@@ -732,8 +746,6 @@ ipcMain.handle('calculate', (event, data) => {
 function saveGroupConfig(data) {
   const key = data.groupKey;
   if (!GROUP_META.some(g => g.key === key)) throw new Error('未知的目的地');
-
-  setSetting('surcharge_mode_' + key, data.surchargeMode === 'max' ? 'max' : 'stack');
 
   // 起算重量：一箱起算 / 多箱每箱起算
   if (data.minWeightSingle !== undefined && data.minWeightSingle !== '') {

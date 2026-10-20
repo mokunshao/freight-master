@@ -399,6 +399,96 @@ td textarea {
   resize: vertical;
 }
 
+td.seq {
+  font-weight: 600;
+  color: #57606a;
+  text-align: center;
+  background: #f6f8fa;
+}
+
+.combinations {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.combo-row {
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.combo-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.combo-name {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-size: 14px;
+  background: #fff;
+}
+
+.combo-line select {
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  font-size: 14px;
+  background: #fff;
+}
+
+.combo-rules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px;
+}
+
+.combo-cb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #fff;
+  border: 1px solid #e1e4e8;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.combo-cb.is-on {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.combo-cb input[type='checkbox'] {
+  margin: 0;
+}
+
+.combo-cb-num {
+  font-weight: 600;
+  color: #57606a;
+  min-width: 28px;
+}
+
+.combo-cb-desc {
+  color: #57606a;
+}
+
+.combo-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 th input {
   padding: 6px;
   border: 1px solid #d0d7de;
