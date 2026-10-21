@@ -571,16 +571,25 @@
 
     const boxes = normalizeBoxes(rawBoxes);
     const minWeight = getMinWeight(group, boxes.length); // 起算重量：一箱 / 多箱每箱
-    const items = boxes.map((box, index) => {
+
+    // 1) 先算每箱的计费重（起算重量为下限，不满起算重按起算重）
+    const measured = boxes.map(box => {
       const m = measure(box.length, box.width, box.height, volDivisor);
       m.actualWeight = box.weight;
+      m.sidesText = `${box.length}×${box.width}×${box.height}`;
+      m.chargedWeight = Math.max(minWeight, m.volWeight);
+      return m;
+    });
 
-      // 每箱单独计算：计费重 = max(起重, 体积重)，再按该箱计费重查阶梯、单价
-      const chargedWeight = Math.max(minWeight, m.volWeight);
-      const tier = pickTier(group.tiers, chargedWeight);
-      const unitPrice = toNum(row.prices[tier.id], 0);
+    // 2) 阶梯按「整票合计计费重」取一档，所有箱共用这个单价
+    //    合计重不满最低阶梯（如 10KG+）时按最低档算
+    const totalChargedWeight = round2(measured.reduce((acc, m) => acc + m.chargedWeight, 0));
+    const tier = pickTier(group.tiers, totalChargedWeight);
+    const unitPrice = toNum(row.prices[tier.id], 0);
+
+    const items = measured.map((m, index) => {
+      const chargedWeight = m.chargedWeight;
       const baseFreight = chargedWeight * unitPrice;
-      m.chargedWeight = chargedWeight;
 
       const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, activeRules);
       if (rejected) {
@@ -591,10 +600,10 @@
 
       return {
         index: index + 1,
-        sides: `${box.length}×${box.width}×${box.height}`,
+        sides: m.sidesText,
         girth: m.girth,
         volume: m.volume,
-        actualWeight: box.weight,
+        actualWeight: m.actualWeight,
         volWeight: m.volWeight,
         chargedWeight,
         tierLabel: tier.label,
