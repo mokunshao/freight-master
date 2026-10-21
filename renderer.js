@@ -571,14 +571,13 @@ function ruleTableHtml(group) {
         <thead>
           <tr>
             <th style="width:56px">序号</th>
-            <th style="width:130px">规则组</th>
+            <th style="width:140px">规则组</th>
             <th style="width:100px">条件字段</th>
             <th style="width:130px">次级字段</th>
-            <th style="width:100px">下限（≥）</th>
-            <th style="width:100px">上限（&lt;）</th>
-            <th style="width:100px">金额（元）</th>
-            <th style="width:60px">启用</th>
-            <th style="width:80px">操作</th>
+            <th style="width:110px">下限（≥）</th>
+            <th style="width:110px">上限（&lt;）</th>
+            <th style="width:110px">金额（元）</th>
+            <th style="width:90px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -602,7 +601,6 @@ function ruleTableHtml(group) {
                 rule.threshold_max === null || rule.threshold_max === undefined ? '' : rule.threshold_max
               }"></td>
               <td><input type="number" step="1" data-field="amount" value="${rule.amount}"></td>
-              <td><input type="checkbox" data-field="enabled" ${Number(rule.enabled) === 1 ? 'checked' : ''}></td>
               <td><button class="btn btn-danger btn-sm btn-delete-rule">删除</button></td>
             </tr>
           `
@@ -611,14 +609,14 @@ function ruleTableHtml(group) {
           ${
             group.rules.length
               ? ''
-              : '<tr><td colspan="9" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
+              : '<tr><td colspan="8" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
           }
         </tbody>
       </table>
     </div>
     <div class="actions">
       <button class="btn btn-primary btn-sm btn-add-rule">+ 新增规则</button>
-      <span class="hint">序号 = 规则在本表中的位置（#N）。下方「规则组组合」用复选框把规则编入各组合并设置行为。</span>
+      <span class="hint">序号 = 规则在本表中的位置（#N）。规则是否生效由下方「规则组组合」决定：编入任一组合即启用，未编入任何组合的（规则组为空）不参与计算。</span>
     </div>
     ${combinationsHtml(group)}
     <div class="form-row">
@@ -629,34 +627,60 @@ function ruleTableHtml(group) {
   `;
 }
 
-// 把规则按当前的 rule_group 字段聚成组合
-function buildCombos(group) {
-  const map = new Map(); // name → {name, indexes, mode}
-  group.rules.forEach((r, i) => {
-    const name = r.rule_group || '';
+// 组合是独立维护的列表：group.combos = [{ name, mode }]
+// 规则靠 rule_group 归属到某个组合；规则表里填名字**不会**自动建组合
+// 老数据（没有 combos 字段）从规则里推导一次并写回，保证无缝升级
+function deriveCombosFromRules(rules) {
+  const map = new Map(); // name → { name, mode, indexes }
+  rules.forEach((r, i) => {
+    const name = String(r.rule_group || '').trim();
     if (!name) return;
-    if (!map.has(name)) map.set(name, { name, indexes: [], mode: r.combine_mode || 'add' });
+    if (!map.has(name)) {
+      map.set(name, { name, mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add', indexes: [] });
+    }
     map.get(name).indexes.push(i);
   });
-  return Array.from(map.values()).filter(c => c.indexes.length > 0);
+  return Array.from(map.values());
 }
 
-// 把组合写回规则（rule_group / combine_mode）
+function groupCombos(group) {
+  if (!Array.isArray(group.combos)) group.combos = deriveCombosFromRules(group.rules);
+  return group.combos;
+}
+
+// 已经编入组合的规则下标（没编入的 = 不生效）
+function comboMemberIdx(group) {
+  const set = new Set();
+  groupCombos(group).forEach(c => (c.indexes || []).forEach(i => set.add(i)));
+  return set;
+}
+
+// 当前组合列表（下标过滤掉越界的）
+function buildCombos(group) {
+  return groupCombos(group).map(c => ({
+    name: String(c.name || '').trim(),
+    mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
+    indexes: (c.indexes || []).filter(i => group.rules[i]),
+  }));
+}
+
+// 写回：组合自己持有「名字 + 行为 + 成员下标」，不碰规则的 rule_group / combine_mode
+// 空组合也要保留（刚「+ 新增组合」还没勾规则时不能消失）
 function applyCombos(group, combos) {
-  combos.forEach(combo => {
-    combo.indexes.forEach(idx => {
-      const r = group.rules[idx];
-      if (!r) return;
-      r.rule_group = combo.name;
-      r.combine_mode = combo.mode;
-    });
-  });
+  group.combos = combos.map(c => ({
+    name: String(c.name || '').trim() || '(未命名)',
+    mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
+    indexes: Array.from(new Set(c.indexes || []))
+      .filter(i => group.rules[i])
+      .sort((a, b) => a - b),
+  }));
 }
 
 // 规则组组合（新版）：每个组合一行，里面用复选框选规则
 function combinationsHtml(group) {
   const combos = buildCombos(group);
-  const hasOrphans = group.rules.some(r => !r.rule_group);
+  const members = comboMemberIdx(group);
+  const hasOrphans = group.rules.some((r, i) => !members.has(i));
 
   if (!group.rules.length) {
     return `
@@ -664,19 +688,6 @@ function combinationsHtml(group) {
       <div class="hint">还没有规则，先在上方添加。</div>
     `;
   }
-
-  const ruleChip = (r, i) => {
-    const range = r.threshold_max !== null && r.threshold_max !== undefined && r.threshold_max !== ''
-      ? `${r.threshold}≤&lt;${r.threshold_max}`
-      : `≥${r.threshold}`;
-    return `
-      <label class="combo-cb">
-        <input type="checkbox" data-field="combo_cb" data-rule-idx="${i}">
-        <span class="combo-cb-num">#${i + 1}</span>
-        <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${range}, ${r.amount} 元</span>
-      </label>
-    `;
-  };
 
   const rows = combos
     .map(
@@ -707,12 +718,12 @@ function combinationsHtml(group) {
 
   return `
     <div class="section-title">${group.name} · 规则组组合</div>
-    <div class="hint">勾选规则（#序号）以加入当前组合；同一规则只能勾在一个组合里（勾到新组合时自动从旧组合移走）。不同组合按各自行为合并。</div>
+    <div class="hint">组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选的规则不参与计算。</div>
     <div class="combinations">
-      ${rows}
+      ${rows || '<div class="hint">还没有组合，点「+ 新增组合」创建，再勾选规则编入。</div>'}
       <div class="combo-actions">
         <button class="btn btn-primary btn-sm btn-add-combo">+ 新增组合</button>
-        ${hasOrphans ? '<span class="warn">有未分组的规则（在规则表里给「规则组」列填个名字即可归入）。</span>' : ''}
+        ${hasOrphans ? '<span class="warn">有规则还没编入任何组合（未编入 = 不生效），勾到上面的组合里即可启用。</span>' : ''}
       </div>
     </div>
   `;
@@ -756,27 +767,23 @@ function handleDataInput(e) {
     return;
   }
 
-  // 组合 checkbox：把规则移进/移出该组合
+  // 组合 checkbox：只改当前这个组合的成员，别的组合一概不动
+  // （组合之间完全独立，同一条规则可以同时属于多个组合）
   if (field === 'combo_cb') {
     const ruleIdx = Number(e.target.dataset.ruleIdx);
     const comboIdx = Number(e.target.dataset.comboIdx);
     const combos = buildCombos(group);
-    // 先把这一规则从任何已有组合中移除
-    combos.forEach(c => {
-      c.indexes = c.indexes.filter(i => i !== ruleIdx);
-    });
-    // 勾上则加入该组合
-    if (e.target.checked) {
-      if (!combos[comboIdx]) combos[comboIdx] = { name: `组合${comboIdx + 1}`, indexes: [], mode: 'add' };
-      combos[comboIdx].indexes.push(ruleIdx);
-      combos[comboIdx].indexes.sort((a, b) => a - b);
-    }
-    applyCombos(group, combos.filter(c => c.indexes.length));
+    if (!combos[comboIdx]) combos[comboIdx] = { name: `组合${comboIdx + 1}`, indexes: [], mode: 'add' };
+    const set = new Set(combos[comboIdx].indexes);
+    if (e.target.checked) set.add(ruleIdx);
+    else set.delete(ruleIdx);
+    combos[comboIdx].indexes = Array.from(set).sort((a, b) => a - b);
+    applyCombos(group, combos); // 空组合也保留，刚新增还没勾规则时不能消失
     renderGroupPanel();
     return;
   }
 
-  // 组合改名 / 改行为：批量更新成员规则
+  // 组合改名 / 改行为：只改组合自己（不再回写成员规则的 rule_group / combine_mode）
   if (field === 'combo_name' || field === 'combo_mode') {
     const comboIdx = Number(e.target.dataset.comboIdx);
     const combos = buildCombos(group);
@@ -804,8 +811,7 @@ function handleDataInput(e) {
       if (e.target.value) rule.field = e.target.value;
       return;
     }
-    if (field === 'enabled') rule[field] = e.target.checked ? 1 : 0;
-    else if (field === 'threshold' || field === 'amount') rule[field] = Number(e.target.value);
+    if (field === 'threshold' || field === 'amount') rule[field] = Number(e.target.value);
     else if (field === 'threshold_max') rule[field] = e.target.value === '' ? null : Number(e.target.value);
     else rule[field] = e.target.value;
     // 规则组改名后，下方的「规则组组合方式」需要同步刷新（只在失焦时重绘，避免打断输入）
@@ -832,6 +838,12 @@ function collectGroup(group) {
     minWeightSingle: Number(group.minWeightSingle),
     minWeightPerBox: Number(group.minWeightPerBox),
     tiers: group.tiers.map(t => ({ id: t.id, min_weight: Number(t.min_weight) })),
+    // 组合列表（名字 + 行为 + 成员下标）独立提交，与规则表的规则组名无关
+    combos: groupCombos(group).map(c => ({
+      name: String(c.name || '').trim(),
+      mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
+      indexes: Array.from(new Set((c.indexes || []).filter(i => group.rules[i]))).sort((a, b) => a - b),
+    })),
     rows: group.rows.map(row => ({
       id: row.id,
       name: row.row_name,
@@ -852,7 +864,8 @@ function collectGroup(group) {
           : Number(rule.threshold_max),
       amount: Number(rule.amount),
       combine_mode: COMBINE_MODE_LABELS[rule.combine_mode] ? rule.combine_mode : 'add',
-      enabled: Number(rule.enabled) === 1 ? 1 : 0,
+      // 规则表不再有「启用」列：是否生效由是否被组合勾选决定（未编入 = 不参与计算）
+      enabled: 1,
     })),
   };
 }
@@ -876,7 +889,7 @@ groupPanels.addEventListener('click', async e => {
     } else if (e.target.classList.contains('btn-add-rule')) {
       group.rules.push({
         id: null,
-        rule_group: '新规则',
+        rule_group: '', // 默认未编入组合（= 不生效），需到下方组合里勾选
         field: 'girth',
         threshold: 0,
         threshold_max: null,
@@ -888,32 +901,30 @@ groupPanels.addEventListener('click', async e => {
     } else if (e.target.classList.contains('btn-delete-rule')) {
       const index = Number(e.target.closest('[data-rule]').dataset.rule);
       group.rules.splice(index, 1);
+      // 规则下标整体前移，组合里的成员下标要跟着重排
+      applyCombos(
+        group,
+        groupCombos(group).map(c => ({
+          ...c,
+          indexes: (c.indexes || [])
+            .filter(i => i !== index)
+            .map(i => (i > index ? i - 1 : i)),
+        }))
+      );
       renderGroupPanel();
     } else if (e.target.classList.contains('btn-add-combo')) {
-      // 新增组合：默认加到规则表末尾（避免空名）
-      const usedNames = new Set(buildCombos(group).map(c => c.name));
+      // 只创建空组合，成员由下方复选框勾选（不再自动把未分组规则塞进来）
+      const usedNames = new Set(groupCombos(group).map(c => c.name));
       let name = '新组合';
       let i = 2;
       while (usedNames.has(name)) { name = '新组合' + (i++); }
-      // 临时策略：先创建一个空组合行。把任意未分组规则丢进来
-      const orphans = group.rules
-        .map((r, idx) => ({ r, idx }))
-        .filter(({ r }) => !r.rule_group);
-      if (orphans.length) {
-        orphans.forEach(({ r }) => (r.rule_group = name));
-      }
+      groupCombos(group).push({ name, mode: 'add', indexes: [] });
       renderGroupPanel();
+      showToast('已新增组合：填名字、选行为并勾选规则后保存');
     } else if (e.target.classList.contains('btn-delete-combo')) {
       const comboIdx = Number(e.target.dataset.comboIdx);
-      const combos = buildCombos(group);
-      // 删除该组合，其余规则保留原状态（解组后将变"未组合"显示，但保留 rule_group 不动以免破坏）
-      const removed = combos.splice(comboIdx, 1)[0];
-      if (removed) {
-        // 把该组合名清空，避免遗留歧义
-        removed.indexes.forEach(idx => {
-          if (group.rules[idx]) group.rules[idx].rule_group = '';
-        });
-      }
+      // 只删组合本身；成员规则的「规则组」名保持不动（两边不联动），但会变回未编入 = 不生效
+      if (buildCombos(group)[comboIdx]) groupCombos(group).splice(comboIdx, 1);
       renderGroupPanel();
     } else if (e.target.classList.contains('btn-save-group')) {
       const updated = await api.saveGroup(collectGroup(group));

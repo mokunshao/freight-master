@@ -182,6 +182,7 @@
         surchargeMode: meta.surchargeMode,
         minWeightSingle: meta.minWeightSingle,
         minWeightPerBox: meta.minWeightPerBox,
+        combos: deriveCombosFromRules(rules),
         tiers,
         rows,
         rules,
@@ -197,7 +198,8 @@
         ? null
         : toNum(rule.threshold_max, null);
     return {
-      rule_group: rule.rule_group || '规则',
+      // 规则组留空 = 未编入任何组合（不生效），不要兜底成别的名字
+      rule_group: String(rule.rule_group === undefined || rule.rule_group === null ? '' : rule.rule_group).trim(),
       field: FIELD_LABELS[rule.field] ? rule.field : 'weight',
       threshold: toNum(rule.threshold, 0),
       threshold_max: thresholdMax,
@@ -205,6 +207,45 @@
       combine_mode: COMBINE_MODE_LABELS[rule.combine_mode] ? rule.combine_mode : 'add',
       enabled: rule.enabled === undefined ? 1 : Number(rule.enabled) === 1 ? 1 : 0,
     };
+  }
+
+  // 组合列表（[{name, mode}]）是权威来源；老数据没有这个字段时，从规则里推导一次
+  function deriveCombosFromRules(rules) {
+    const map = new Map(); // name → { name, mode, indexes }
+    (rules || []).forEach((r, i) => {
+      const name = String(r.rule_group || '').trim();
+      if (!name) return;
+      if (!map.has(name)) {
+        map.set(name, { name, mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add', indexes: [] });
+      }
+      map.get(name).indexes.push(i);
+    });
+    return Array.from(map.values());
+  }
+
+  // 组合自己持有成员下标；老格式（只有 name + mode）按规则组名折算一次
+  function sanitizeCombos(list, rules) {
+    const count = (rules || []).length;
+    const cleaned = [];
+    (Array.isArray(list) ? list : []).forEach(c => {
+      const name = String((c && c.name) || '').trim();
+      if (!name) return; // 只丢空名；同名组合是允许的（组合之间独立，按位置区分）
+      let indexes = Array.isArray(c.indexes)
+        ? c.indexes.map(i => toNum(i, -1)).filter(i => i >= 0 && i < count)
+        : null;
+      if (indexes === null) {
+        indexes = (rules || []).reduce((acc, r, i) => {
+          if (String(r.rule_group || '').trim() === name) acc.push(i);
+          return acc;
+        }, []);
+      }
+      cleaned.push({
+        name,
+        mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
+        indexes: Array.from(new Set(indexes)).sort((a, b) => a - b),
+      });
+    });
+    return cleaned;
   }
 
   // 校验 localStorage 里的数据是否还认得出来；不认得就重新播种
@@ -255,6 +296,7 @@
         surchargeMode: meta.surchargeMode,
         minWeightSingle: Math.max(0, toNum(g.minWeightSingle, meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(g.minWeightPerBox, meta.minWeightPerBox)),
+        combos: Array.isArray(g.combos) ? sanitizeCombos(g.combos, rules) : deriveCombosFromRules(rules),
         tiers,
         rows,
         rules,
@@ -369,8 +411,9 @@
       volume: m.volume,
     };
 
-    const enabled = rules.filter(r => Number(r.enabled) === 1);
-    const note = rule => `${rule.rule_group}：${FIELD_LABELS[rule.field] || rule.field} ${formatRange(rule)}`;
+    // 调用方已按组合筛好：只有被编入组合的规则才会传进来
+    const enabled = rules;
+    const note = rule => `${rule.comboName || rule.rule_group || '规则'}：${FIELD_LABELS[rule.field] || rule.field} ${formatRange(rule)}`;
 
     // 拒收：命中任意一条即不收货
     const rejected = enabled.find(r => ruleMode(r) === 'reject' && ruleMatches(r, fields));
@@ -393,15 +436,17 @@
       });
 
     // 组内满足任一条件只收一次（取组内最高），行为相同的组之间再按规则合并
+    // 「组」= 规则组组合（成员由组合自己持有，与规则的规则组名无关）
     const groupsOf = mode => {
       const matched = {};
       enabled
         .filter(r => ruleMode(r) === mode && ruleMatches(r, fields))
         .forEach(r => {
           const amount = toNum(r.amount, 0);
-          const current = matched[r.rule_group];
+          const key = r.comboKey !== undefined ? `c${r.comboKey}` : r.comboName || r.rule_group || '';
+          const current = matched[key];
           if (!current || amount > current.amount) {
-            matched[r.rule_group] = { amount, rule: r };
+            matched[key] = { amount, rule: r };
           }
         });
       return Object.values(matched);
@@ -473,6 +518,17 @@
     if (!group.tiers.length) throw new Error(`「${group.name}」还没有设置报价阶梯`);
     const volDivisor = toNum(state.volDivisor, DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
 
+    // 参与计算的规则 = 被组合勾选的规则；行为（叠加 / 取最高 …）以组合为准，与规则的规则组名无关
+    // 组合之间独立：同一条规则被多个组合勾选时，会在每个组合里各算一次
+    const activeRules = [];
+    (group.combos || []).forEach((combo, comboIdx) => {
+      (combo.indexes || []).forEach(idx => {
+        const rule = group.rules[idx];
+        if (!rule) return;
+        activeRules.push({ ...rule, combine_mode: combo.mode, comboName: combo.name, comboKey: comboIdx });
+      });
+    });
+
     const boxes = normalizeBoxes(rawBoxes);
     const minWeight = getMinWeight(group, boxes.length); // 起算重量：一箱 / 多箱每箱
     const items = boxes.map((box, index) => {
@@ -486,7 +542,7 @@
       const baseFreight = chargedWeight * unitPrice;
       m.chargedWeight = chargedWeight;
 
-      const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, group.rules);
+      const { rejected, rejectReason, surcharge, detail } = calculateSurcharge(m, activeRules);
       if (rejected) {
         throw new Error(
           `第 ${index + 1} 箱超出「${group.name}」承运范围，不收货 —— ${rejectReason}。请调整该箱或联系货代确认。`
@@ -565,6 +621,9 @@
     // 规则整组替换（与桌面端行为一致）
     group.rules = (data.rules || []).map(rule => ({ id: allocId(), group_key: group.key, ...normalizeRule(rule) }));
 
+    // 组合列表独立提交（空数组 = 确实没有组合，不要回退推导）
+    if (Array.isArray(data.combos)) group.combos = sanitizeCombos(data.combos, group.rules);
+
     persist();
     return getGroupConfig(group.key);
   }
@@ -615,6 +674,11 @@
         mode: group.mode,
         minWeightSingle: toNum(group.minWeightSingle, 10),
         minWeightPerBox: toNum(group.minWeightPerBox, 10),
+        combos: (group.combos || []).map(c => ({
+          name: c.name,
+          mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
+          indexes: (c.indexes || []).slice(),
+        })),
         tiers: group.tiers.map(t => ({
           id: t.id,
           min_weight: toNum(t.min_weight, 0),
@@ -683,6 +747,8 @@
       });
 
       const rules = (Array.isArray(item.rules) ? item.rules : []).map(r => normalizeRule(r));
+      // 老配置文件（如桌面版导出的）没有 combos，就从规则里推导
+      const combos = Array.isArray(item.combos) ? sanitizeCombos(item.combos, rules) : deriveCombosFromRules(rules);
 
       return {
         key: meta.key,
@@ -690,6 +756,7 @@
         mode: meta.mode,
         minWeightSingle: Math.max(0, toNum(item.minWeightSingle, meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(item.minWeightPerBox, meta.minWeightPerBox)),
+        combos,
         tiers,
         rows,
         rules,
@@ -732,6 +799,7 @@
         surchargeMode: (GROUP_META.find(m => m.key === plan.key) || {}).surchargeMode,
         minWeightSingle: plan.minWeightSingle,
         minWeightPerBox: plan.minWeightPerBox,
+        combos: plan.combos,
         tiers,
         rows,
         rules,
