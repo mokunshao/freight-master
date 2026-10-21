@@ -133,8 +133,8 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- 浏览器（局域网 server 模式）下用 fetch 实现 freightApi；Electron 里由 preload.js 提供，此处自动跳过 -->
-  <script src="web-api.js"></script>
+  <!-- 网页版核心：配置存 localStorage，暴露 window.freightApi（接口与旧桌面端一致） -->
+  <script src="app.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

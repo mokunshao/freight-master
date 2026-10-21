@@ -1,17 +1,11 @@
-# 依赖
-node_modules/
-
-# 打包产物
-dist/
-dist-pack/
-
-# 运行期生成的数据与日志
-freight-master.db
-start.log
-*.log
-out.txt
-err.txt
-
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 本地开发产生的文件
+*.log
+node_modules/
+
+# 桌面版遗留的本地数据库与导出文件（含报价数据，别误提交到公开仓库）
+freight-master.db
+freight-master-config-from-desktop.json
