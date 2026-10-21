@@ -420,6 +420,15 @@ td.seq {
   padding: 12px;
 }
 
+.max-row {
+  background: #fff8e5;
+  border-color: #e3b341;
+}
+
+.max-tag {
+  color: #9a6700;
+}
+
 .combo-line {
   display: flex;
   gap: 8px;

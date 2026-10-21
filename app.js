@@ -175,6 +175,7 @@
         return row;
       });
       const rules = data.rules.map(rule => ({ id: allocId(), group_key: meta.key, ...normalizeRule(rule) }));
+      const split = splitMaxRules(rules, deriveCombosFromRules(rules));
       fresh.groups.push({
         key: meta.key,
         name: meta.name,
@@ -182,7 +183,8 @@
         surchargeMode: meta.surchargeMode,
         minWeightSingle: meta.minWeightSingle,
         minWeightPerBox: meta.minWeightPerBox,
-        combos: deriveCombosFromRules(rules),
+        combos: split.combos,
+        maxRules: split.maxRules,
         tiers,
         rows,
         rules,
@@ -248,6 +250,28 @@
     return cleaned;
   }
 
+  // 「不叠加取最高」单独存一份规则下标：它优先级最高，不挂在组合下面
+  function sanitizeMax(list, rules) {
+    const count = (rules || []).length;
+    return Array.from(
+      new Set((Array.isArray(list) ? list : []).map(i => toNum(i, -1)).filter(i => i >= 0 && i < count))
+    ).sort((a, b) => a - b);
+  }
+
+  // 老配置里 max 写在规则 / 组合上：搬到独立的 maxRules，组合本身降级为叠加
+  function splitMaxRules(rules, combos) {
+    const max = new Set();
+    (rules || []).forEach((r, i) => {
+      if (r.combine_mode === 'max') max.add(i);
+    });
+    const cleaned = (combos || []).map(c => {
+      if (c.mode !== 'max') return c;
+      (c.indexes || []).forEach(i => max.add(i));
+      return { ...c, mode: 'add' };
+    });
+    return { combos: cleaned, maxRules: Array.from(max).sort((a, b) => a - b) };
+  }
+
   // 校验 localStorage 里的数据是否还认得出来；不认得就重新播种
   function validStoredState(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
@@ -289,6 +313,12 @@
         const normalized = normalizeRule(r);
         return { id: toNum(r.id, 0) || allocId(), group_key: meta.key, ...normalized };
       });
+      const combos = Array.isArray(g.combos) ? sanitizeCombos(g.combos, rules) : deriveCombosFromRules(rules);
+      // 有独立 maxRules 就直接用；老数据则从规则 / 组合上的 max 迁移过来
+      const split = Array.isArray(g.maxRules)
+        ? { combos, maxRules: sanitizeMax(g.maxRules, rules) }
+        : splitMaxRules(rules, combos);
+
       return {
         key: meta.key,
         name: meta.name,
@@ -296,7 +326,8 @@
         surchargeMode: meta.surchargeMode,
         minWeightSingle: Math.max(0, toNum(g.minWeightSingle, meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(g.minWeightPerBox, meta.minWeightPerBox)),
-        combos: Array.isArray(g.combos) ? sanitizeCombos(g.combos, rules) : deriveCombosFromRules(rules),
+        combos: split.combos,
+        maxRules: split.maxRules,
         tiers,
         rows,
         rules,
@@ -462,7 +493,8 @@
     const exclusive = groupsOf('max');
     if (exclusive.length) {
       const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
-      detail.push(`不叠加取最高：${note(best.rule)} → +${best.amount} 元`);
+      // 取最高区是独立区域，note 里已经带「不叠加取最高」前缀，这里不再重复
+      detail.push(`${note(best.rule)} → +${best.amount} 元`);
       return {
         rejected: false,
         surcharge: round2(best.amount + sum(dispatch)),
@@ -518,15 +550,23 @@
     if (!group.tiers.length) throw new Error(`「${group.name}」还没有设置报价阶梯`);
     const volDivisor = toNum(state.volDivisor, DEFAULT_VOL_DIVISOR) || DEFAULT_VOL_DIVISOR;
 
-    // 参与计算的规则 = 被组合勾选的规则；行为（叠加 / 取最高 …）以组合为准，与规则的规则组名无关
+    // 「不叠加取最高」优先级最高：进了这里的规则只按取最高算，不再走所属组合
+    const maxIdx = new Set(sanitizeMax(group.maxRules, group.rules));
+
+    // 参与计算的规则 = 被组合勾选的规则；行为（叠加 / 卡派 …）以组合为准，与规则的规则组名无关
     // 组合之间独立：同一条规则被多个组合勾选时，会在每个组合里各算一次
     const activeRules = [];
     (group.combos || []).forEach((combo, comboIdx) => {
       (combo.indexes || []).forEach(idx => {
         const rule = group.rules[idx];
-        if (!rule) return;
+        if (!rule || maxIdx.has(idx)) return;
         activeRules.push({ ...rule, combine_mode: combo.mode, comboName: combo.name, comboKey: comboIdx });
       });
+    });
+    maxIdx.forEach(idx => {
+      const rule = group.rules[idx];
+      if (!rule) return;
+      activeRules.push({ ...rule, combine_mode: 'max', comboName: '不叠加取最高', comboKey: 'max' });
     });
 
     const boxes = normalizeBoxes(rawBoxes);
@@ -623,6 +663,8 @@
 
     // 组合列表独立提交（空数组 = 确实没有组合，不要回退推导）
     if (Array.isArray(data.combos)) group.combos = sanitizeCombos(data.combos, group.rules);
+    // 「不叠加取最高」独立提交
+    if (Array.isArray(data.maxRules)) group.maxRules = sanitizeMax(data.maxRules, group.rules);
 
     persist();
     return getGroupConfig(group.key);
@@ -679,6 +721,7 @@
           mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
           indexes: (c.indexes || []).slice(),
         })),
+        maxRules: (group.maxRules || []).slice(),
         tiers: group.tiers.map(t => ({
           id: t.id,
           min_weight: toNum(t.min_weight, 0),
@@ -749,6 +792,9 @@
       const rules = (Array.isArray(item.rules) ? item.rules : []).map(r => normalizeRule(r));
       // 老配置文件（如桌面版导出的）没有 combos，就从规则里推导
       const combos = Array.isArray(item.combos) ? sanitizeCombos(item.combos, rules) : deriveCombosFromRules(rules);
+      const split = Array.isArray(item.maxRules)
+        ? { combos, maxRules: sanitizeMax(item.maxRules, rules) }
+        : splitMaxRules(rules, combos);
 
       return {
         key: meta.key,
@@ -756,7 +802,8 @@
         mode: meta.mode,
         minWeightSingle: Math.max(0, toNum(item.minWeightSingle, meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(item.minWeightPerBox, meta.minWeightPerBox)),
-        combos,
+        combos: split.combos,
+        maxRules: split.maxRules,
         tiers,
         rows,
         rules,
@@ -800,6 +847,7 @@
         minWeightSingle: plan.minWeightSingle,
         minWeightPerBox: plan.minWeightPerBox,
         combos: plan.combos,
+        maxRules: plan.maxRules,
         tiers,
         rows,
         rules,

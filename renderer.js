@@ -60,10 +60,10 @@ function subFieldOptions(rule) {
 }
 
 // 附加费行为：逐条规则配置，取代原来的「类型 + 国家级叠加方式」
+// 组合可选的行为。「不叠加取最高」不在这里 —— 它优先级最高，在下方独立区域里配置
 const COMBINE_MODE_LABELS = {
   add: '叠加（与其他叠加组求和）',
   not_stack: '不叠加（自身累加，不影响叠加组）',
-  max: '不叠加取最高（命中后只收本类最高）',
   cardispatch: '卡派（独立累加）',
   notice: '提醒（不收费）',
   reject: '拒收（达到即不收货）',
@@ -72,7 +72,6 @@ const COMBINE_MODE_LABELS = {
 const COMBINE_MODE_HINTS = {
   add: '同一个规则组内满足任一条件只收一次（取组内最高）；不同规则组之间相加。',
   not_stack: '同样按规则组去重后累加，但不会被「不叠加取最高」替换掉。',
-  max: '命中任意一条「不叠加取最高」规则后，只收这类里的最高金额，其余叠加/不叠加规则全部不计。',
   cardispatch: '卡车派送等固定费用，单独累加，不受「不叠加取最高」影响。',
   notice: '不产生费用，只在结果里给出提示。',
   reject: '命中即视为超出承运范围，计算时直接报错。',
@@ -616,9 +615,10 @@ function ruleTableHtml(group) {
     </div>
     <div class="actions">
       <button class="btn btn-primary btn-sm btn-add-rule">+ 新增规则</button>
-      <span class="hint">序号 = 规则在本表中的位置（#N）。规则是否生效由下方「规则组组合」决定：编入任一组合即启用，未编入任何组合的（规则组为空）不参与计算。</span>
+      <span class="hint">序号 = 规则在本表中的位置（#N）。规则是否生效由下方决定：被任一「规则组组合」或「不叠加取最高」勾选即启用，两处都没勾的不参与计算。</span>
     </div>
     ${combinationsHtml(group)}
+    ${maxRulesHtml(group)}
     <div class="form-row">
       <div class="form-group">
         <button class="btn btn-primary btn-save-group">保存「${group.name}」这一页</button>
@@ -646,6 +646,12 @@ function deriveCombosFromRules(rules) {
 function groupCombos(group) {
   if (!Array.isArray(group.combos)) group.combos = deriveCombosFromRules(group.rules);
   return group.combos;
+}
+
+// 「不叠加取最高」独立维护一组规则下标（优先级最高，不挂在组合下）
+function groupMaxRules(group) {
+  if (!Array.isArray(group.maxRules)) group.maxRules = [];
+  return group.maxRules;
 }
 
 // 已经编入组合的规则下标（没编入的 = 不生效）
@@ -680,6 +686,7 @@ function applyCombos(group, combos) {
 function combinationsHtml(group) {
   const combos = buildCombos(group);
   const members = comboMemberIdx(group);
+  const maxPicked = new Set(groupMaxRules(group));
   const hasOrphans = group.rules.some((r, i) => !members.has(i));
 
   if (!group.rules.length) {
@@ -707,7 +714,9 @@ function combinationsHtml(group) {
             <label class="combo-cb${c.indexes.includes(i) ? ' is-on' : ''}">
               <input type="checkbox" data-field="combo_cb" data-combo-idx="${ci}" data-rule-idx="${i}" ${c.indexes.includes(i) ? 'checked' : ''}>
               <span class="combo-cb-num">#${i + 1}</span>
-              <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${r.threshold_max != null && r.threshold_max !== '' ? `${r.threshold}≤&lt;${r.threshold_max}` : `≥${r.threshold}`}, ${r.amount} 元</span>
+              <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${r.threshold_max != null && r.threshold_max !== '' ? `${r.threshold}≤&lt;${r.threshold_max}` : `≥${r.threshold}`}, ${r.amount} 元${
+            maxPicked.has(i) ? ' <b class="max-tag">（归取最高）</b>' : ''
+          }</span>
             </label>
           `).join('')}
         </div>
@@ -725,6 +734,47 @@ function combinationsHtml(group) {
         <button class="btn btn-primary btn-sm btn-add-combo">+ 新增组合</button>
         ${hasOrphans ? '<span class="warn">有规则还没编入任何组合（未编入 = 不生效），勾到上面的组合里即可启用。</span>' : ''}
       </div>
+    </div>
+  `;
+}
+
+// 「不叠加取最高」独立区域：优先级最高，命中的规则里只收金额最高的一条
+function maxRulesHtml(group) {
+  const picked = new Set(groupMaxRules(group).filter(i => group.rules[i]));
+
+  if (!group.rules.length) {
+    return `
+      <div class="section-title">${group.name} · 不叠加取最高（优先级最高）</div>
+      <div class="hint">还没有规则，先在上方添加。</div>
+    `;
+  }
+
+  const chips = group.rules
+    .map(
+      (r, i) => `
+        <label class="combo-cb${picked.has(i) ? ' is-on' : ''}">
+          <input type="checkbox" data-field="max_cb" data-rule-idx="${i}" ${picked.has(i) ? 'checked' : ''}>
+          <span class="combo-cb-num">#${i + 1}</span>
+          <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${
+        r.threshold_max != null && r.threshold_max !== '' ? `${r.threshold}≤&lt;${r.threshold_max}` : `≥${r.threshold}`
+      }, ${r.amount} 元</span>
+        </label>
+      `
+    )
+    .join('');
+
+  return `
+    <div class="section-title">${group.name} · 不叠加取最高（优先级最高）</div>
+    <div class="hint">勾选的规则命中后，只收其中<b>金额最高</b>的那一条，并且所有<b>叠加 / 不叠加</b>组合的费用全部不计（卡派、提醒、拒收不受影响）。被勾选的规则不再按它所属的组合计算。</div>
+    <div class="combinations">
+      <div class="combo-row max-row">
+        <div class="combo-rules">${chips}</div>
+      </div>
+      ${
+        picked.size
+          ? `<div class="combo-actions"><span class="warn">已选 ${picked.size} 条：命中时只收其中最高金额，叠加 / 不叠加组合全部不计。</span></div>`
+          : '<div class="combo-actions"><span class="hint">还没勾选任何规则。</span></div>'
+      }
     </div>
   `;
 }
@@ -764,6 +814,19 @@ function handleDataInput(e) {
   // 起算重量（一箱 / 多箱每箱）
   if (field === 'minWeightSingle' || field === 'minWeightPerBox') {
     group[field] = e.target.value === '' ? 0 : Number(e.target.value);
+    return;
+  }
+
+  // 「不叠加取最高」勾选：独立维护，与组合互不干扰（优先级最高）
+  if (field === 'max_cb') {
+    const idx = Number(e.target.dataset.ruleIdx);
+    const set = new Set(groupMaxRules(group));
+    if (e.target.checked) set.add(idx);
+    else set.delete(idx);
+    group.maxRules = Array.from(set)
+      .filter(i => group.rules[i])
+      .sort((a, b) => a - b);
+    renderGroupPanel();
     return;
   }
 
@@ -838,6 +901,8 @@ function collectGroup(group) {
     minWeightSingle: Number(group.minWeightSingle),
     minWeightPerBox: Number(group.minWeightPerBox),
     tiers: group.tiers.map(t => ({ id: t.id, min_weight: Number(t.min_weight) })),
+    // 「不叠加取最高」独立提交（优先级最高）
+    maxRules: Array.from(new Set(groupMaxRules(group).filter(i => group.rules[i]))).sort((a, b) => a - b),
     // 组合列表（名字 + 行为 + 成员下标）独立提交，与规则表的规则组名无关
     combos: groupCombos(group).map(c => ({
       name: String(c.name || '').trim(),
@@ -901,7 +966,10 @@ groupPanels.addEventListener('click', async e => {
     } else if (e.target.classList.contains('btn-delete-rule')) {
       const index = Number(e.target.closest('[data-rule]').dataset.rule);
       group.rules.splice(index, 1);
-      // 规则下标整体前移，组合里的成员下标要跟着重排
+      // 规则下标整体前移，组合与「不叠加取最高」的成员下标都要跟着重排
+      group.maxRules = groupMaxRules(group)
+        .filter(i => i !== index)
+        .map(i => (i > index ? i - 1 : i));
       applyCombos(
         group,
         groupCombos(group).map(c => ({
