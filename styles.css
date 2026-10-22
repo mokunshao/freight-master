@@ -148,6 +148,65 @@ header p {
   box-shadow: 0 4px 16px rgba(229, 57, 53, 0.3);
 }
 
+.btn-secondary {
+  background: #eceff1;
+  color: #37474f;
+}
+
+.btn-secondary:hover {
+  background: #e0e4e7;
+}
+
+/* 未保存改动提醒 */
+.dirty-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 11px 15px;
+  background: #fff7e6;
+  border: 1px solid #f0c36d;
+  border-radius: 8px;
+  color: #8a5a00;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dirty-banner[hidden] {
+  display: none;
+}
+
+.dirty-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e6a23c;
+}
+
+.sub-tab.is-dirty::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: #e6a23c;
+  vertical-align: middle;
+}
+
+.sub-tab.active.is-dirty::after {
+  background: #ffe08a;
+}
+
+.group-panel.is-dirty .btn-save-group {
+  box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.4);
+}
+
+.btn.is-dirty {
+  box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.4);
+}
+
 .result-card {
   margin-top: 24px;
   background: #f8fafc;

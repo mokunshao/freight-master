@@ -466,15 +466,17 @@
         detail.push(`提醒：${note(r)}，当前值 ${fields[r.field]}`);
       });
 
-    // 组内满足任一条件只收一次（取组内最高），行为相同的组之间再按规则合并
     // 「组」= 规则组组合（成员由组合自己持有，与规则的规则组名无关）
-    const groupsOf = mode => {
+    const groupKeyOf = r => (r.comboKey !== undefined ? `c${r.comboKey}` : r.comboName || r.rule_group || '');
+
+    // 组内只收最高的一条，不同组之间再相加
+    const groupMax = mode => {
       const matched = {};
       enabled
         .filter(r => ruleMode(r) === mode && ruleMatches(r, fields))
         .forEach(r => {
           const amount = toNum(r.amount, 0);
-          const key = r.comboKey !== undefined ? `c${r.comboKey}` : r.comboName || r.rule_group || '';
+          const key = groupKeyOf(r);
           const current = matched[key];
           if (!current || amount > current.amount) {
             matched[key] = { amount, rule: r };
@@ -486,11 +488,11 @@
     const sum = list => round2(list.reduce((acc, g) => acc + g.amount, 0));
     const describe = list => list.map(g => `${note(g.rule)} → +${g.amount} 元`);
 
-    // 卡派：独立累加，永远不受「不叠加取最大值」影响
-    const dispatch = groupsOf('cardispatch');
+    // 卡派：组内取最高、组间累加，永远不受「不叠加取最高」影响
+    const dispatch = groupMax('cardispatch');
 
-    // 不叠加取最大值：命中即替换掉所有 叠加 / 不叠加 组
-    const exclusive = groupsOf('max');
+    // 不叠加取最高：命中即只收最高的一条，替换掉所有 叠加 / 不叠加 组
+    const exclusive = groupMax('max');
     if (exclusive.length) {
       const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
       // 取最高区是独立区域，note 里已经带「不叠加取最高」前缀，这里不再重复
@@ -502,8 +504,13 @@
       };
     }
 
-    const add = groupsOf('add');
-    const notStack = groupsOf('not_stack');
+    // 叠加：命中的每条规则都收 —— 组内累加，不同组之间也累加
+    const add = enabled
+      .filter(r => ruleMode(r) === 'add' && ruleMatches(r, fields))
+      .map(r => ({ amount: toNum(r.amount, 0), rule: r }));
+    // 不叠加：组内只取最高的一条，不同组之间累加
+    const notStack = groupMax('not_stack');
+
     return {
       rejected: false,
       surcharge: round2(sum(add) + sum(notStack) + sum(dispatch)),
@@ -911,6 +918,7 @@
 
   window.freightApi = {
     getConfig: () => Promise.resolve(getConfig()),
+    getGroupConfig: key => Promise.resolve(getGroupConfig(key)),
     calculate: data =>
       Promise.resolve(calculateGroup(data.groupKey, { zip: data.zip, rowId: data.rowId }, data.boxes)),
     saveGroup: data => Promise.resolve(saveGroupConfig(data)),

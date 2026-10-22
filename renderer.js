@@ -62,23 +62,26 @@ function subFieldOptions(rule) {
 // 附加费行为：逐条规则配置，取代原来的「类型 + 国家级叠加方式」
 // 组合可选的行为。「不叠加取最高」不在这里 —— 它优先级最高，在下方独立区域里配置
 const COMBINE_MODE_LABELS = {
-  add: '叠加（与其他叠加组求和）',
-  not_stack: '不叠加（自身累加，不影响叠加组）',
-  cardispatch: '卡派（独立累加）',
+  add: '叠加（命中的都要，金额累加）',
+  not_stack: '不叠加（组内只收最高的一条）',
+  cardispatch: '卡派（组内取最高，独立累加）',
   notice: '提醒（不收费）',
   reject: '拒收（达到即不收货）',
 };
 
 const COMBINE_MODE_HINTS = {
-  add: '同一个规则组内满足任一条件只收一次（取组内最高）；不同规则组之间相加。',
-  not_stack: '同样按规则组去重后累加，但不会被「不叠加取最高」替换掉。',
-  cardispatch: '卡车派送等固定费用，单独累加，不受「不叠加取最高」影响。',
+  add: '同一个组合内命中几条就收几条、金额相加；不同组合之间再相加。',
+  not_stack: '同一个组合内命中多条时只收金额最高的那一条；不同组合之间相加。',
+  cardispatch: '卡车派送等固定费用：组内取最高，单独累加，不受「不叠加取最高」影响。',
   notice: '不产生费用，只在结果里给出提示。',
   reject: '命中即视为超出承运范围，计算时直接报错。',
 };
 
 let config = { volDivisor: 6000, groups: [] };
 let boxes = [createBox()];
+
+// 每个目的地「最近一次保存」的快照，用来判断页面上是否有未保存的改动
+const savedSnapshots = new Map();
 
 const groupSelect = document.getElementById('group');
 const zipGroup = document.getElementById('zip-group');
@@ -622,6 +625,11 @@ function ruleTableHtml(group) {
     <div class="form-row">
       <div class="form-group">
         <button class="btn btn-primary btn-save-group">保存「${group.name}」这一页</button>
+        <div class="hint">改完必须点这里才会写入，否则只影响当前页面。</div>
+      </div>
+      <div class="form-group">
+        <button class="btn btn-secondary btn-reload-group">重新加载已保存配置</button>
+        <div class="hint">放弃这一页未保存的改动，回到最近一次保存的状态。</div>
       </div>
     </div>
   `;
@@ -789,8 +797,9 @@ function renderGroupPanel() {
   const panel = document.createElement('div');
   panel.className = 'group-panel';
   panel.dataset.group = group.key;
-  panel.innerHTML = rateTableHtml(group) + ruleTableHtml(group);
+  panel.innerHTML = dirtyBannerHtml(group) + rateTableHtml(group) + ruleTableHtml(group);
   groupPanels.appendChild(panel);
+  updateDirtyIndicators();
 }
 
 function activeGroup() {
@@ -935,6 +944,50 @@ function collectGroup(group) {
   };
 }
 
+// ---------- 未保存改动的提醒 ----------
+function groupSignature(group) {
+  return JSON.stringify(collectGroup(group));
+}
+
+function rememberSaved(group) {
+  if (group) savedSnapshots.set(group.key, groupSignature(group));
+}
+
+function isGroupDirty(group) {
+  if (!group) return false;
+  const saved = savedSnapshots.get(group.key);
+  return saved !== undefined && saved !== groupSignature(group);
+}
+
+function isVolDivisorDirty() {
+  return Number(volDivisorInput.value) !== Number(config.volDivisor);
+}
+
+function dirtyBannerHtml(group) {
+  return `
+    <div class="dirty-banner"${isGroupDirty(group) ? '' : ' hidden'}>
+      <span class="dirty-dot"></span>
+      <span>「${escapeHtml(group.name)}」有未保存的改动 —— 点下方「保存」才会生效；点「重新加载已保存配置」可以放弃这些改动。</span>
+    </div>
+  `;
+}
+
+// 打字时不能整块重绘（会丢焦点），只更新提醒
+function updateDirtyIndicators() {
+  const group = activeGroup();
+  const dirty = isGroupDirty(group);
+  const panel = groupPanels.querySelector('.group-panel');
+  if (panel) {
+    panel.classList.toggle('is-dirty', dirty);
+    const banner = panel.querySelector('.dirty-banner');
+    if (banner) banner.hidden = !dirty;
+  }
+  groupTabs.querySelectorAll('.sub-tab').forEach(tab => {
+    tab.classList.toggle('is-dirty', isGroupDirty(config.groups.find(g => g.key === tab.dataset.group)));
+  });
+  btnSaveVol.classList.toggle('is-dirty', isVolDivisorDirty());
+}
+
 groupPanels.addEventListener('click', async e => {
   const group = activeGroup();
   if (!group) return;
@@ -997,9 +1050,22 @@ groupPanels.addEventListener('click', async e => {
     } else if (e.target.classList.contains('btn-save-group')) {
       const updated = await api.saveGroup(collectGroup(group));
       Object.assign(group, updated);
+      rememberSaved(group); // 保存成功 = 新的基准状态
       renderGroupPanel();
       renderCountryOptions();
       showToast(`「${group.name}」已保存`);
+    } else if (e.target.classList.contains('btn-reload-group')) {
+      // 重新加载：丢掉本页未保存的改动，回到最近一次保存的状态
+      if (isGroupDirty(group) && !confirm(`「${group.name}」有未保存的改动，重新加载会丢弃这些改动，确定继续吗？`)) {
+        return;
+      }
+      const saved = await api.getGroupConfig(group.key);
+      Object.assign(group, saved);
+      rememberSaved(group);
+      renderGroupTabs();
+      renderGroupPanel();
+      renderCountryOptions();
+      showToast(`已重新加载「${group.name}」最近一次保存的配置`);
     }
   } catch (err) {
     showToast(err.message || '操作失败');
@@ -1014,7 +1080,21 @@ btnSaveVol.addEventListener('click', async () => {
   }
   await api.setVolDivisor(value);
   config.volDivisor = value;
+  updateDirtyIndicators();
   showToast('体积重系数已保存');
+});
+
+// 打字 / 勾选后只刷新提醒，不重绘（重绘会丢焦点）
+groupPanels.addEventListener('input', updateDirtyIndicators);
+groupPanels.addEventListener('change', updateDirtyIndicators);
+volDivisorInput.addEventListener('input', updateDirtyIndicators);
+
+// 关页面 / 刷新前兜底提醒
+window.addEventListener('beforeunload', e => {
+  const dirty = config.groups.some(isGroupDirty) || isVolDivisorDirty();
+  if (!dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
 });
 
 btnReset.addEventListener('click', async () => {
@@ -1059,9 +1139,12 @@ let activeDataGroup = 'us';
 function refreshData() {
   volDivisorInput.value = config.volDivisor;
   if (!config.groups.some(g => g.key === activeDataGroup)) activeDataGroup = config.groups[0].key;
+  // 刚读进来的就是「已保存」状态，作为比对基准
+  config.groups.forEach(rememberSaved);
   renderGroupOptions();
   renderGroupTabs();
   renderGroupPanel();
+  updateDirtyIndicators();
 }
 
 async function init() {
