@@ -46,6 +46,18 @@
     return acc;
   }, {});
 
+  // 主字段 key → 该主字段下的次级字段列表（没有次级字段的用主字段自己兜底，上层逻辑保持一致）
+  function conditionKeysOf(mainField) {
+    const g = FIELD_GROUPS.find(x => x.key === mainField) || FIELD_GROUPS[0];
+    return g.fields ? g.fields.map(f => f.key) : [g.key];
+  }
+
+  // 次级字段 → 所属主字段（迁移老格式的单字段规则）
+  function mainFieldOf(subField) {
+    const g = FIELD_GROUPS.find(x => (x.fields ? x.fields.some(f => f.key === subField) : x.key === subField));
+    return g ? g.key : null;
+  }
+
   const COMBINE_MODE_LABELS = {
     add: '叠加',
     not_stack: '不叠加',
@@ -74,13 +86,13 @@
         { name: '美东（邮编0,1,2,3开头）', matchKey: '0,1,2,3', prices: [18.7, 17.2, 15.2, 14.2] },
       ],
       rules: [
-        { rule_group: '实重', field: 'weight', threshold: 22.5, amount: 120, combine_mode: 'add', enabled: 1 },
-        { rule_group: '围长', field: 'girth', threshold: 265, amount: 120, combine_mode: 'add', enabled: 1 },
-        { rule_group: '单边', field: 'longest', threshold: 120, amount: 120, combine_mode: 'add', enabled: 1 },
-        { rule_group: '单边', field: 'second_longest', threshold: 75, amount: 120, combine_mode: 'add', enabled: 1 },
-        { rule_group: '超大件', field: 'girth', threshold: 330, amount: 500, combine_mode: 'max', enabled: 1 },
-        { rule_group: '超大件', field: 'volume', threshold: 283168, amount: 500, combine_mode: 'max', enabled: 1 },
-        { rule_group: '超大件', field: 'weight', threshold: 50, amount: 500, combine_mode: 'max', enabled: 1 },
+        { rule_group: '实重', field: 'weight', conditions: { weight: { min: 22.5 } }, amount: 120, combine_mode: 'add', enabled: 1 },
+        { rule_group: '围长', field: 'girth', conditions: { girth: { min: 265 } }, amount: 120, combine_mode: 'add', enabled: 1 },
+        // 单边：最长边 / 次长边写在同一条规则里（满足其一，只收一次）
+        { rule_group: '单边', field: 'side', conditions: { longest: { min: 120 }, second_longest: { min: 75 } }, amount: 120, combine_mode: 'add', enabled: 1 },
+        { rule_group: '超大件', field: 'girth', conditions: { girth: { min: 330 } }, amount: 500, combine_mode: 'max', enabled: 1 },
+        { rule_group: '超大件', field: 'volume', conditions: { volume: { min: 283168 } }, amount: 500, combine_mode: 'max', enabled: 1 },
+        { rule_group: '超大件', field: 'weight', conditions: { weight: { min: 50 } }, amount: 500, combine_mode: 'max', enabled: 1 },
       ],
     },
     eu: {
@@ -95,47 +107,45 @@
         { name: 'Greece, Ireland, Portugal 希腊、爱尔兰、葡萄牙', prices: [21.0, 21.0, 20.0] },
       ],
       rules: [
-        { rule_group: '围长330', field: 'girth', threshold: 330, amount: 350, combine_mode: 'max', enabled: 1 },
-        { rule_group: '围长300', field: 'girth', threshold: 300, amount: 300, combine_mode: 'max', enabled: 1 },
-        { rule_group: '实重30', field: 'weight', threshold: 30, amount: 300, combine_mode: 'max', enabled: 1 },
+        { rule_group: '围长330', field: 'girth', conditions: { girth: { min: 330 } }, amount: 350, combine_mode: 'max', enabled: 1 },
+        { rule_group: '围长300', field: 'girth', conditions: { girth: { min: 300 } }, amount: 300, combine_mode: 'max', enabled: 1 },
+        { rule_group: '实重30', field: 'weight', conditions: { weight: { min: 30 } }, amount: 300, combine_mode: 'max', enabled: 1 },
       ],
     },
     ca: {
       tiers: [10, 21, 101],
       rows: [{ name: '加拿大 Canada', prices: [0, 0, 0] }],
       rules: [
-        { rule_group: '①实重', field: 'weight', threshold: 22, amount: 130, combine_mode: 'add' },
-        { rule_group: '②单边', field: 'longest', threshold: 121, amount: 130, combine_mode: 'add' },
-        { rule_group: '②单边', field: 'second_longest', threshold: 75, amount: 130, combine_mode: 'add' },
-        { rule_group: '③围长', field: 'girth', threshold: 265, amount: 130, combine_mode: 'add' },
-        { rule_group: '④超大件', field: 'girth', threshold: 320, amount: 700, combine_mode: 'max' },
-        { rule_group: '④超大件', field: 'weight', threshold: 40, amount: 700, combine_mode: 'max' },
-        { rule_group: '⑤不收货', field: 'weight', threshold: 68, amount: 0, combine_mode: 'reject' },
-        { rule_group: '⑤不收货', field: 'longest', threshold: 151, amount: 0, combine_mode: 'reject' },
-        { rule_group: '⑤不收货', field: 'girth', threshold: 400, amount: 0, combine_mode: 'reject' },
+        { rule_group: '①实重', field: 'weight', conditions: { weight: { min: 22 } }, amount: 130, combine_mode: 'add' },
+        { rule_group: '②单边', field: 'side', conditions: { longest: { min: 121 }, second_longest: { min: 75 } }, amount: 130, combine_mode: 'add' },
+        { rule_group: '③围长', field: 'girth', conditions: { girth: { min: 265 } }, amount: 130, combine_mode: 'add' },
+        { rule_group: '④超大件', field: 'girth', conditions: { girth: { min: 320 } }, amount: 700, combine_mode: 'max' },
+        { rule_group: '④超大件', field: 'weight', conditions: { weight: { min: 40 } }, amount: 700, combine_mode: 'max' },
+        { rule_group: '⑤不收货', field: 'weight', conditions: { weight: { min: 68 } }, amount: 0, combine_mode: 'reject' },
+        { rule_group: '⑤不收货', field: 'side', conditions: { longest: { min: 151 } }, amount: 0, combine_mode: 'reject' },
+        { rule_group: '⑤不收货', field: 'girth', conditions: { girth: { min: 400 } }, amount: 0, combine_mode: 'reject' },
       ],
     },
     uk: {
       tiers: [10, 21, 101],
       rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }],
       rules: [
-        { rule_group: '①实重30-40', field: 'weight', threshold: 30, threshold_max: 40, amount: 330, combine_mode: 'add' },
-        { rule_group: '②③尺寸', field: 'longest', threshold: 100, threshold_max: 150, amount: 300, combine_mode: 'add' },
-        { rule_group: '②③尺寸', field: 'second_longest', threshold: 70, threshold_max: 100, amount: 300, combine_mode: 'add' },
-        { rule_group: '②③尺寸', field: 'shortest', threshold: 60, threshold_max: 100, amount: 300, combine_mode: 'add' },
-        { rule_group: '②③尺寸', field: 'girth', threshold: 300, threshold_max: 400, amount: 300, combine_mode: 'add' },
+        { rule_group: '①实重30-40', field: 'weight', conditions: { weight: { min: 30, max: 40 } }, amount: 330, combine_mode: 'add' },
+        // ②③尺寸：三边条件写在同一条规则里（满足其一，只收一次）；围长是另一个主字段，单独一条
+        { rule_group: '②③尺寸', field: 'side', conditions: { longest: { min: 100, max: 150 }, second_longest: { min: 70, max: 100 }, shortest: { min: 60, max: 100 } }, amount: 300, combine_mode: 'not_stack' },
+        { rule_group: '②③尺寸', field: 'girth', conditions: { girth: { min: 300, max: 400 } }, amount: 300, combine_mode: 'not_stack' },
       ],
     },
     au: {
       tiers: [10, 21, 101],
       rows: [{ name: '澳大利亚 Australia', prices: [0, 0, 0] }],
       rules: [
-        { rule_group: '计费重≥30', field: 'charged_weight', threshold: 30, threshold_max: 35, amount: 100, combine_mode: 'add' },
-        { rule_group: '计费重≥35', field: 'charged_weight', threshold: 35, threshold_max: 80, amount: 300, combine_mode: 'add' },
-        { rule_group: '计费重≥80', field: 'charged_weight', threshold: 80, amount: 300, combine_mode: 'add' },
-        { rule_group: '单边120-199', field: 'longest', threshold: 120, threshold_max: 200, amount: 100, combine_mode: 'add' },
-        { rule_group: '单边200-299', field: 'longest', threshold: 200, threshold_max: 300, amount: 200, combine_mode: 'add' },
-        { rule_group: '木托盘提醒', field: 'weight', threshold: 30, amount: 0, combine_mode: 'notice' },
+        { rule_group: '计费重≥30', field: 'weight', conditions: { charged_weight: { min: 30, max: 35 } }, amount: 100, combine_mode: 'add' },
+        { rule_group: '计费重≥35', field: 'weight', conditions: { charged_weight: { min: 35, max: 80 } }, amount: 300, combine_mode: 'add' },
+        { rule_group: '计费重≥80', field: 'weight', conditions: { charged_weight: { min: 80 } }, amount: 300, combine_mode: 'add' },
+        { rule_group: '单边120-199', field: 'side', conditions: { longest: { min: 120, max: 200 } }, amount: 100, combine_mode: 'add' },
+        { rule_group: '单边200-299', field: 'side', conditions: { longest: { min: 200, max: 300 } }, amount: 200, combine_mode: 'add' },
+        { rule_group: '木托盘提醒', field: 'weight', conditions: { weight: { min: 30 } }, amount: 0, combine_mode: 'notice' },
       ],
     },
   };
@@ -193,21 +203,43 @@
     return fresh;
   }
 
-  // 落库前把每条规则修成合法形状（字段 / 行为 / 启用位兜底）
+  // 落库前把每条规则修成合法形状：主字段 + 次级字段条件 + 金额 + 行为
+  // conditions = { 次级字段: { min, max } }，min 是下限（≥），max 是可留空的上限（<）
+  // 次级字段全部非必填：没填的不进 conditions，一条都没填的规则不参与命中
+  // 老格式（单 field + threshold / threshold_max，含桌面版导出的配置）在这里自动迁移
   function normalizeRule(rule) {
-    const thresholdMax =
-      rule.threshold_max === '' || rule.threshold_max === null || rule.threshold_max === undefined
-        ? null
-        : toNum(rule.threshold_max, null);
+    const raw = rule || {};
+    const main = FIELD_GROUPS.find(g => g.key === raw.field)
+      ? raw.field
+      : mainFieldOf(raw.field) || FIELD_GROUPS[0].key;
+    const allowed = conditionKeysOf(main);
+    const conditions = {};
+
+    if (raw.conditions && typeof raw.conditions === 'object') {
+      allowed.forEach(key => {
+        const cond = raw.conditions[key];
+        if (!cond || typeof cond !== 'object') return;
+        conditions[key] = { min: toNum(cond.min, null), max: toNum(cond.max, null) };
+      });
+    } else {
+      // 老格式：把唯一的 threshold / threshold_max 落到对应的次级字段上
+      const key = allowed.includes(raw.field) ? raw.field : allowed[0];
+      conditions[key] = { min: toNum(raw.threshold, null), max: toNum(raw.threshold_max, null) };
+    }
+
+    // 两个框都留空 = 该次级字段不参与判断
+    Object.keys(conditions).forEach(key => {
+      if (conditions[key].min === null && conditions[key].max === null) delete conditions[key];
+    });
+
     return {
       // 规则组留空 = 未编入任何组合（不生效），不要兜底成别的名字
-      rule_group: String(rule.rule_group === undefined || rule.rule_group === null ? '' : rule.rule_group).trim(),
-      field: FIELD_LABELS[rule.field] ? rule.field : 'weight',
-      threshold: toNum(rule.threshold, 0),
-      threshold_max: thresholdMax,
-      amount: toNum(rule.amount, 0),
-      combine_mode: COMBINE_MODE_LABELS[rule.combine_mode] ? rule.combine_mode : 'add',
-      enabled: rule.enabled === undefined ? 1 : Number(rule.enabled) === 1 ? 1 : 0,
+      rule_group: String(raw.rule_group === undefined || raw.rule_group === null ? '' : raw.rule_group).trim(),
+      field: main,
+      conditions,
+      amount: toNum(raw.amount, 0),
+      combine_mode: COMBINE_MODE_LABELS[raw.combine_mode] ? raw.combine_mode : 'add',
+      enabled: raw.enabled === undefined ? 1 : Number(raw.enabled) === 1 ? 1 : 0,
     };
   }
 
@@ -410,19 +442,46 @@
     return chosen;
   }
 
-  // 规则匹配：下限（≥）+ 可选上限（<）
-  function ruleMatches(rule, fields) {
-    const value = fields[rule.field];
-    if (value === undefined || value === null) return false;
-    if (!(value >= toNum(rule.threshold, 0))) return false;
-    const max = rule.threshold_max;
+  // 单个次级字段的区间判断：下限（≥）+ 可选上限（<），两边都能留空
+  function conditionMatches(cond, value) {
+    const { min, max } = cond || {};
+    if (min !== null && min !== undefined && min !== '' && !(value >= Number(min))) return false;
     if (max !== null && max !== undefined && max !== '' && !(value < Number(max))) return false;
     return true;
   }
 
-  function formatRange(rule) {
-    const max = rule.threshold_max;
-    return max !== null && max !== undefined && max !== '' ? `≥${rule.threshold} 且 <${max}` : `≥${rule.threshold}`;
+  // 规则命中：**填过的次级字段里任意一个满足**，整条规则就命中（所有次级字段算一个整体，只收一次金额）
+  // 返回命中的那个次级字段；一条次级字段都没填 = 永不命中
+  function hitKey(rule, fields) {
+    const keys = Object.keys(rule.conditions || {});
+    if (!keys.length) return null;
+    return (
+      keys.find(key => {
+        const value = fields[key];
+        if (value === undefined || value === null || value === '' || Number.isNaN(Number(value))) return false;
+        return conditionMatches(rule.conditions[key], Number(value));
+      }) || null
+    );
+  }
+
+  function ruleMatches(rule, fields) {
+    return hitKey(rule, fields) !== null;
+  }
+
+  function formatRange(cond) {
+    const hasMin = cond.min !== null && cond.min !== undefined && cond.min !== '';
+    const hasMax = cond.max !== null && cond.max !== undefined && cond.max !== '';
+    if (hasMin && hasMax) return `≥${cond.min} 且 <${cond.max}`;
+    if (hasMax) return `<${cond.max}`;
+    if (hasMin) return `≥${cond.min}`;
+    return '不限';
+  }
+
+  // 整条规则的描述：所有次级字段条件用「或」串起来（一个整体）
+  function formatConditions(rule) {
+    const keys = Object.keys(rule.conditions || {});
+    if (!keys.length) return '未设置条件（不会命中）';
+    return keys.map(key => `${FIELD_LABELS[key] || key} ${formatRange(rule.conditions[key])}`).join(' 或 ');
   }
 
   function ruleMode(rule) {
@@ -444,14 +503,15 @@
 
     // 调用方已按组合筛好：只有被编入组合的规则才会传进来
     const enabled = rules;
-    const note = rule => `${rule.comboName || rule.rule_group || '规则'}：${FIELD_LABELS[rule.field] || rule.field} ${formatRange(rule)}`;
+    const note = rule => `${rule.comboName || rule.rule_group || '规则'}：${formatConditions(rule)}`;
 
     // 拒收：命中任意一条即不收货
     const rejected = enabled.find(r => ruleMode(r) === 'reject' && ruleMatches(r, fields));
     if (rejected) {
+      const key = hitKey(rejected, fields);
       return {
         rejected: true,
-        rejectReason: `${note(rejected)}，当前值 ${fields[rejected.field]}`,
+        rejectReason: `${note(rejected)}，当前 ${FIELD_LABELS[key] || key} = ${fields[key]}`,
         surcharge: 0,
         detail: [],
       };
@@ -463,7 +523,8 @@
     enabled
       .filter(r => ruleMode(r) === 'notice' && ruleMatches(r, fields))
       .forEach(r => {
-        detail.push(`提醒：${note(r)}，当前值 ${fields[r.field]}`);
+        const key = hitKey(r, fields);
+        detail.push(`提醒：${note(r)}，当前 ${FIELD_LABELS[key] || key} = ${fields[key]}`);
       });
 
     // 「组」= 规则组组合（成员由组合自己持有，与规则的规则组名无关）
@@ -757,8 +818,7 @@
           return {
             rule_group: normalized.rule_group,
             field: normalized.field,
-            threshold: normalized.threshold,
-            threshold_max: normalized.threshold_max,
+            conditions: normalized.conditions,
             amount: normalized.amount,
             combine_mode: normalized.combine_mode,
             enabled: normalized.enabled,

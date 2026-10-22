@@ -40,23 +40,63 @@ const FIELD_LABELS = FIELD_GROUPS.reduce((acc, g) => {
   return acc;
 }, {});
 
-// 叶子字段属于哪个主字段
-function fieldGroupOf(field) {
-  return (
-    FIELD_GROUPS.find(g => (g.fields ? g.fields.some(f => f.key === field) : g.key === field)) ||
-    FIELD_GROUPS[0]
-  );
+// 次级字段的短名（不带单位），规则表里用它当输入框的标签
+const SUB_LABELS = FIELD_GROUPS.reduce((acc, g) => {
+  if (!g.fields) {
+    acc[g.key] = g.name;
+    return acc;
+  }
+  g.fields.forEach(f => {
+    acc[f.key] = f.label;
+  });
+  return acc;
+}, {});
+
+// 主字段 → 该主字段下的次级字段列表（没有次级字段的用主字段自己兜底，渲染逻辑统一）
+function conditionKeysOf(mainField) {
+  const group = FIELD_GROUPS.find(g => g.key === mainField) || FIELD_GROUPS[0];
+  return group.fields ? group.fields.map(f => f.key) : [group.key];
 }
 
-// 次级字段下拉：没有次级字段时禁用
-function subFieldOptions(rule) {
-  const group = fieldGroupOf(rule.field);
-  if (!group.fields) {
-    return '<select data-field="field_sub" disabled><option value="">—</option></select>';
-  }
-  return `<select data-field="field_sub">${group.fields
-    .map(f => `<option value="${f.key}" ${rule.field === f.key ? 'selected' : ''}>${f.label}</option>`)
-    .join('')}</select>`;
+function numOrEmpty(v) {
+  return v === null || v === undefined || v === '' ? '' : v;
+}
+
+// 区间文案：min = 下限（≥），max = 上限（<），两边都能留空
+function condRangeText(c) {
+  const hasMin = c.min !== null && c.min !== undefined && c.min !== '';
+  const hasMax = c.max !== null && c.max !== undefined && c.max !== '';
+  if (hasMin && hasMax) return `≥${c.min} 且 <${c.max}`;
+  if (hasMin) return `≥${c.min}`;
+  return `<${c.max}`;
+}
+
+// 一条规则的完整描述：所有次级字段条件用「或」串起来 —— 在组合里它们是一个整体
+function describeRule(rule) {
+  const keys = Object.keys(rule.conditions || {});
+  if (!keys.length) return '未设置条件（不会命中）';
+  return keys.map(key => `${FIELD_LABELS[key] || key} ${condRangeText(rule.conditions[key] || {})}`).join(' 或 ');
+}
+
+// 次级字段条件区：主字段下的每个次级字段都列出来，全部可以不填（留空 = 该次级字段不参与判断）
+function conditionsCell(rule) {
+  const group = FIELD_GROUPS.find(g => g.key === rule.field) || FIELD_GROUPS[0];
+  const rows = conditionKeysOf(group.key)
+    .map(key => {
+      const c = (rule.conditions || {})[key] || {};
+      return `
+        <div class="cond-row">
+          <span class="cond-name">${escapeHtml(SUB_LABELS[key] || key)}</span>
+          <input type="number" step="0.1" placeholder="不限" data-field="cond_min" data-sub="${key}" value="${numOrEmpty(c.min)}">
+          <span class="cond-sep">≤ &lt;</span>
+          <input type="number" step="0.1" placeholder="不限" data-field="cond_max" data-sub="${key}" value="${numOrEmpty(c.max)}">
+          <span class="cond-unit">${group.unit}</span>
+        </div>`;
+    })
+    .join('');
+  return `<div class="cond-list">${
+    group.fields ? rows : `${rows}<div class="cond-note">该条件字段没有次级字段</div>`
+  }</div>`;
 }
 
 // 附加费行为：逐条规则配置，取代原来的「类型 + 国家级叠加方式」
@@ -583,9 +623,7 @@ function ruleTableHtml(group) {
             <th style="width:56px">序号</th>
             <th style="width:140px">规则组</th>
             <th style="width:100px">条件字段</th>
-            <th style="width:130px">次级字段</th>
-            <th style="width:110px">下限（≥）</th>
-            <th style="width:110px">上限（&lt;）</th>
+            <th style="width:300px">次级字段条件（≥ 下限，&lt; 上限）</th>
             <th style="width:110px">金额（元）</th>
             <th style="width:90px">操作</th>
           </tr>
@@ -600,16 +638,11 @@ function ruleTableHtml(group) {
               <td>
                 <select data-field="field_main">
                   ${FIELD_GROUPS.map(
-                    g =>
-                      `<option value="${g.key}" ${fieldGroupOf(rule.field).key === g.key ? 'selected' : ''}>${g.name}</option>`
+                    g => `<option value="${g.key}" ${rule.field === g.key ? 'selected' : ''}>${g.name}</option>`
                   ).join('')}
                 </select>
               </td>
-              <td>${subFieldOptions(rule)}</td>
-              <td><input type="number" step="0.1" data-field="threshold" value="${rule.threshold}"></td>
-              <td><input type="number" step="0.1" data-field="threshold_max" placeholder="不限" value="${
-                rule.threshold_max === null || rule.threshold_max === undefined ? '' : rule.threshold_max
-              }"></td>
+              <td class="cond-cell">${conditionsCell(rule)}</td>
               <td><input type="number" step="1" data-field="amount" value="${rule.amount}"></td>
               <td><button class="btn btn-danger btn-sm btn-delete-rule">删除</button></td>
             </tr>
@@ -619,7 +652,7 @@ function ruleTableHtml(group) {
           ${
             group.rules.length
               ? ''
-              : '<tr><td colspan="8" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
+              : '<tr><td colspan="6" class="hint">暂无规则，点击「新增规则」添加。</td></tr>'
           }
         </tbody>
       </table>
@@ -628,6 +661,7 @@ function ruleTableHtml(group) {
       <button class="btn btn-primary btn-sm btn-add-rule">+ 新增规则</button>
       <span class="hint">序号 = 规则在本表中的位置（#N）。规则是否生效由下方决定：被任一「规则组组合」或「不叠加取最高」勾选即启用，两处都没勾的不参与计算。</span>
     </div>
+    <div class="hint">选了「重量」或「边长」后，该主字段下的次级字段会全部列出，<b>每个次级字段都可以不填</b>（留空 = 不参与判断）；填了的次级字段<b>任意一个满足，整条规则就命中，只收一次金额</b>。一条都没填的规则不会命中。</div>
     ${combinationsHtml(group)}
     ${maxRulesHtml(group)}
     <div class="form-row">
@@ -730,7 +764,7 @@ function combinationsHtml(group) {
             <label class="combo-cb${c.indexes.includes(i) ? ' is-on' : ''}">
               <input type="checkbox" data-field="combo_cb" data-combo-idx="${ci}" data-rule-idx="${i}" ${c.indexes.includes(i) ? 'checked' : ''}>
               <span class="combo-cb-num">#${i + 1}</span>
-              <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${r.threshold_max != null && r.threshold_max !== '' ? `${r.threshold}≤&lt;${r.threshold_max}` : `≥${r.threshold}`}, ${r.amount} 元${
+              <span class="combo-cb-desc">${escapeHtml(describeRule(r))}, ${r.amount} 元${
             maxPicked.has(i) ? ' <b class="max-tag">（归取最高）</b>' : ''
           }</span>
             </label>
@@ -743,7 +777,8 @@ function combinationsHtml(group) {
 
   return `
     <div class="section-title">${group.name} · 规则组组合</div>
-    <div class="hint">组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选的规则不参与计算。</div>
+    <div class="hint"><b>一条规则 = 一个整体</b>：它的所有次级字段只占这一个复选框（#序号），满足其一就命中本条，只按本条的金额收一次。<br>
+    组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选的规则不参与计算。</div>
     <div class="combinations">
       ${rows || '<div class="hint">还没有组合，点「+ 新增组合」创建，再勾选规则编入。</div>'}
       <div class="combo-actions">
@@ -771,9 +806,7 @@ function maxRulesHtml(group) {
         <label class="combo-cb${picked.has(i) ? ' is-on' : ''}">
           <input type="checkbox" data-field="max_cb" data-rule-idx="${i}" ${picked.has(i) ? 'checked' : ''}>
           <span class="combo-cb-num">#${i + 1}</span>
-          <span class="combo-cb-desc">${escapeHtml(FIELD_LABELS[r.field] || r.field)} ${
-        r.threshold_max != null && r.threshold_max !== '' ? `${r.threshold}≤&lt;${r.threshold_max}` : `≥${r.threshold}`
-      }, ${r.amount} 元</span>
+          <span class="combo-cb-desc">${escapeHtml(describeRule(r))}, ${r.amount} 元</span>
         </label>
       `
     )
@@ -880,19 +913,31 @@ function handleDataInput(e) {
   if (ruleTr) {
     const rule = group.rules[Number(ruleTr.dataset.rule)];
     if (!rule) return;
-    // 主字段切换：次级字段跟着换，默认取该类别的第一项（无次级字段时直接用主字段）
+    // 切换主字段：次级字段整块换掉（旧次级字段不属于新主字段，留着也没意义）
     if (field === 'field_main') {
       const picked = FIELD_GROUPS.find(g => g.key === e.target.value);
-      if (picked) rule.field = picked.fields ? picked.fields[0].key : picked.key;
+      if (picked && picked.key !== rule.field) {
+        rule.field = picked.key;
+        rule.conditions = {};
+      }
       renderGroupPanel();
       return;
     }
-    if (field === 'field_sub') {
-      if (e.target.value) rule.field = e.target.value;
+    // 次级字段的下限 / 上限：都可以留空，两个都空 = 该次级字段不参与判断
+    if (field === 'cond_min' || field === 'cond_max') {
+      const key = e.target.dataset.sub;
+      const prop = field === 'cond_min' ? 'min' : 'max';
+      rule.conditions = rule.conditions || {};
+      const cond = { min: null, max: null, ...(rule.conditions[key] || {}) };
+      const raw = e.target.value === '' ? null : Number(e.target.value);
+      cond[prop] = raw === null || Number.isNaN(raw) ? null : raw;
+      if (cond.min === null && cond.max === null) delete rule.conditions[key];
+      else rule.conditions[key] = cond;
+      // 输入过程中不重绘（会丢焦点），失焦后再刷新下方的描述
+      if (e.type === 'change') renderGroupPanel();
       return;
     }
-    if (field === 'threshold' || field === 'amount') rule[field] = Number(e.target.value);
-    else if (field === 'threshold_max') rule[field] = e.target.value === '' ? null : Number(e.target.value);
+    if (field === 'amount') rule[field] = Number(e.target.value);
     else rule[field] = e.target.value;
     // 规则组改名后，下方的「规则组组合方式」需要同步刷新（只在失焦时重绘，避免打断输入）
     if (field === 'rule_group' && e.type === 'change') renderGroupPanel();
@@ -939,11 +984,15 @@ function collectGroup(group) {
       id: rule.id,
       rule_group: rule.rule_group,
       field: rule.field,
-      threshold: Number(rule.threshold),
-      threshold_max:
-        rule.threshold_max === null || rule.threshold_max === undefined || rule.threshold_max === ''
-          ? null
-          : Number(rule.threshold_max),
+      // 次级字段条件：只提交填过的，min / max 都可以空
+      conditions: Object.keys(rule.conditions || {}).reduce((acc, key) => {
+        const cond = rule.conditions[key] || {};
+        const min = cond.min === null || cond.min === undefined || cond.min === '' ? null : Number(cond.min);
+        const max = cond.max === null || cond.max === undefined || cond.max === '' ? null : Number(cond.max);
+        if (min === null && max === null) return acc;
+        acc[key] = { min, max };
+        return acc;
+      }, {}),
       amount: Number(rule.amount),
       combine_mode: COMBINE_MODE_LABELS[rule.combine_mode] ? rule.combine_mode : 'add',
       // 规则表不再有「启用」列：是否生效由是否被组合勾选决定（未编入 = 不参与计算）
@@ -1017,8 +1066,7 @@ groupPanels.addEventListener('click', async e => {
         id: null,
         rule_group: '', // 默认未编入组合（= 不生效），需到下方组合里勾选
         field: 'girth',
-        threshold: 0,
-        threshold_max: null,
+        conditions: {}, // 次级字段全部非必填：先空着，用到哪个填哪个
         amount: 0,
         combine_mode: 'add',
         enabled: 1,

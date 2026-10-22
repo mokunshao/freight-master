@@ -321,6 +321,50 @@ td input {
   text-align: center;
 }
 
+/* 附加费规则：主字段下挂的次级字段条件（每个次级字段一组 下限 / 上限） */
+.cond-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cond-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.cond-name {
+  min-width: 104px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #57606a;
+}
+
+.cond-row input {
+  width: 78px;
+  padding: 5px 6px;
+  text-align: center;
+}
+
+.cond-sep {
+  font-size: 12px;
+  color: #888;
+}
+
+.cond-unit {
+  font-size: 12px;
+  color: #999;
+}
+
+.cond-note {
+  font-size: 12px;
+  color: #999;
+  text-align: center;
+}
+
 .section-title {
   margin-top: 28px;
   margin-bottom: 12px;
