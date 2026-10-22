@@ -498,6 +498,40 @@ td .hint {
   display: block;
 }
 
+/* 目的地（国家）增删 */
+.group-admin {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.group-admin .hint {
+  margin-top: 0;
+}
+
+.add-group-form {
+  margin-top: 10px;
+  padding: 14px 16px 4px;
+  background: #fafbfc;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+}
+
+.add-group-form[hidden] {
+  display: none;
+}
+
+.group-admin-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px dashed #e0e0e0;
+}
+
 .sub-tabs {
   display: flex;
   gap: 8px;

@@ -119,6 +119,30 @@
         </div>
 
         <div class="section-title">分国家 / 地区配置</div>
+        <div class="group-admin">
+          <button id="btn-add-group" class="btn btn-primary btn-sm">+ 新增国家 / 地区</button>
+          <span class="hint">目的地可以自由新增、改名、删除；每个目的地有独立的单价表与附加费规则。</span>
+        </div>
+        <div id="add-group-form" class="add-group-form" hidden>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="new-group-name">名称</label>
+              <input id="new-group-name" type="text" placeholder="例如：日本">
+            </div>
+            <div class="form-group">
+              <label for="new-group-mode">目的地匹配方式</label>
+              <select id="new-group-mode">
+                <option value="country">直接选择国家 / 地区（同欧洲）</option>
+                <option value="zip">按邮编分区（同美国）</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="btn-add-group-confirm" class="btn btn-primary btn-sm">确定新增</button>
+            <button id="btn-add-group-cancel" class="btn btn-secondary btn-sm">取消</button>
+            <span class="hint">新增后默认带 10 / 21 / 101KG+ 三档阶梯和一个地区行，单价请先到页面里填写。</span>
+          </div>
+        </div>
         <nav class="sub-tabs" id="group-tabs"></nav>
         <div id="group-panels"></div>
 

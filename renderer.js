@@ -147,6 +147,14 @@ const groupTabs = document.getElementById('group-tabs');
 const groupPanels = document.getElementById('group-panels');
 const btnReset = document.getElementById('btn-reset');
 
+// 目的地（国家）增删：新增表单放在标签栏上方，改名 / 删除放在每个国家页面里
+const btnAddGroup = document.getElementById('btn-add-group');
+const addGroupForm = document.getElementById('add-group-form');
+const newGroupName = document.getElementById('new-group-name');
+const newGroupMode = document.getElementById('new-group-mode');
+const btnAddGroupConfirm = document.getElementById('btn-add-group-confirm');
+const btnAddGroupCancel = document.getElementById('btn-add-group-cancel');
+
 const toast = document.getElementById('toast');
 
 function showToast(msg) {
@@ -553,6 +561,29 @@ function tierHeadHtml(group) {
     .join('');
 }
 
+// 目的地（国家）自身的设置：改名（随本页保存）+ 删除（立即生效）
+function groupAdminHtml(group) {
+  const isLast = config.groups.length <= 1;
+  return `
+    <div class="group-admin-row">
+      <div class="form-group">
+        <label>目的地名称</label>
+        <input type="text" data-field="groupName" value="${escapeAttr(group.name)}">
+        <div class="hint">改名后点下方「保存」生效，标签栏与计算页会同步更新。</div>
+      </div>
+      <div class="form-group">
+        <label>删除这个目的地</label>
+        <button class="btn btn-danger btn-sm btn-delete-group" ${isLast ? 'disabled title="至少要保留一个目的地"' : ''}>删除「${escapeHtml(group.name)}」</button>
+        <div class="hint">${
+          isLast
+            ? '至少要保留一个目的地，不能删除最后一个。'
+            : '连同它的单价表、附加费规则一起删除，立即生效且不可撤销。'
+        }</div>
+      </div>
+    </div>
+  `;
+}
+
 function rateTableHtml(group) {
   const isZip = group.mode === 'zip';
   const placeholder = group.rows.some(row =>
@@ -917,7 +948,8 @@ function renderGroupPanel() {
   const panel = document.createElement('div');
   panel.className = 'group-panel';
   panel.dataset.group = group.key;
-  panel.innerHTML = dirtyBannerHtml(group) + rateTableHtml(group) + ruleTableHtml(group);
+  panel.innerHTML =
+    dirtyBannerHtml(group) + groupAdminHtml(group) + rateTableHtml(group) + ruleTableHtml(group);
   groupPanels.appendChild(panel);
   updateDirtyIndicators();
 }
@@ -937,6 +969,12 @@ function handleDataInput(e) {
   if (e.target.classList.contains('tier-input')) {
     const tier = group.tiers.find(t => t.id === Number(e.target.dataset.tier));
     if (tier) tier.min_weight = Number(e.target.value);
+    return;
+  }
+
+  // 目的地改名：随本页一起保存
+  if (field === 'groupName') {
+    group.name = e.target.value;
     return;
   }
 
@@ -1060,6 +1098,7 @@ groupPanels.addEventListener('change', handleDataInput);
 function collectGroup(group) {
   return {
     groupKey: group.key,
+    name: String(group.name || '').trim(),
     minWeightSingle: Number(group.minWeightSingle),
     minWeightPerBox: Number(group.minWeightPerBox),
     tiers: group.tiers.map(t => ({ id: t.id, min_weight: Number(t.min_weight) })),
@@ -1154,7 +1193,22 @@ groupPanels.addEventListener('click', async e => {
   if (!group) return;
 
   try {
-    if (e.target.classList.contains('btn-add-row')) {
+    if (e.target.classList.contains('btn-delete-group')) {
+      if (e.target.disabled) return;
+      if (!confirm(`确定删除目的地「${group.name}」吗？它的单价表、附加费规则与起算重量都会一起删除，且不可恢复。`)) {
+        return;
+      }
+      await api.deleteGroup({ groupKey: group.key });
+      savedSnapshots.delete(group.key);
+      config.groups = config.groups.filter(g => g.key !== group.key);
+      activeDataGroup = config.groups[0].key;
+      renderGroupTabs();
+      renderGroupPanel();
+      renderGroupOptions();
+      switchGroup();
+      updateDirtyIndicators();
+      showToast(`已删除目的地「${group.name}」`);
+    } else if (e.target.classList.contains('btn-add-row')) {
       const updated = await api.addRateRow({ groupKey: group.key, name: '新增地区' });
       Object.assign(group, updated);
       renderGroupPanel();
@@ -1223,7 +1277,9 @@ groupPanels.addEventListener('click', async e => {
       const updated = await api.saveGroup(collectGroup(group));
       Object.assign(group, updated);
       rememberSaved(group); // 保存成功 = 新的基准状态
+      renderGroupTabs(); // 可能改了目的地名称，标签栏要跟着变
       renderGroupPanel();
+      renderGroupOptions(); // 计算页的下拉框也用目的地名称
       renderCountryOptions();
       showToast(`「${group.name}」已保存`);
     } else if (e.target.classList.contains('btn-reload-group')) {
@@ -1242,6 +1298,56 @@ groupPanels.addEventListener('click', async e => {
   } catch (err) {
     showToast(err.message || '操作失败');
   }
+});
+
+// ---------- 新增目的地（国家 / 地区） ----------
+btnAddGroup.addEventListener('click', () => {
+  const opening = addGroupForm.hidden;
+  addGroupForm.hidden = !opening;
+  if (opening) {
+    newGroupName.value = '';
+    newGroupMode.value = 'country';
+    newGroupName.focus();
+  }
+});
+
+btnAddGroupCancel.addEventListener('click', () => {
+  addGroupForm.hidden = true;
+  newGroupName.value = '';
+});
+
+async function createGroup() {
+  const name = newGroupName.value.trim();
+  if (!name) {
+    showToast('请输入目的地名称');
+    newGroupName.focus();
+    return;
+  }
+  if (config.groups.some(g => g.name === name)) {
+    showToast(`已存在同名目的地：${name}`);
+    return;
+  }
+  try {
+    const created = await api.addGroup({ name, mode: newGroupMode.value });
+    config.groups.push(created);
+    rememberSaved(created);
+    activeDataGroup = created.key;
+    addGroupForm.hidden = true;
+    newGroupName.value = '';
+    renderGroupTabs();
+    renderGroupPanel();
+    renderGroupOptions();
+    switchGroup();
+    updateDirtyIndicators();
+    showToast(`已新增目的地「${created.name}」，请填写单价与附加费规则后保存`);
+  } catch (err) {
+    showToast(err.message || '新增目的地失败');
+  }
+}
+
+btnAddGroupConfirm.addEventListener('click', createGroup);
+newGroupName.addEventListener('keydown', e => {
+  if (e.key === 'Enter') createGroup();
 });
 
 btnSaveVol.addEventListener('click', async () => {
@@ -1270,7 +1376,7 @@ window.addEventListener('beforeunload', e => {
 });
 
 btnReset.addEventListener('click', async () => {
-  if (!confirm('确定要恢复默认数据吗？所有自定义价格与规则都会丢失。')) return;
+  if (!confirm('确定要恢复默认数据吗？所有自定义价格、规则，以及自己新增的目的地都会丢失（只剩出厂的 5 个）。')) return;
   await api.resetDatabase();
   config = await api.getConfig();
   refreshData();

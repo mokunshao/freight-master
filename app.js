@@ -68,6 +68,7 @@
   };
 
   // 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
+  // 现在目的地可以自行增删改名，这份表只用于「出厂默认数据」和给老配置补默认值
   const GROUP_META = [
     { key: 'us', name: '美国', mode: 'zip', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
     { key: 'eu', name: '欧洲', mode: 'country', surchargeMode: 'max', minWeightSingle: 10, minWeightPerBox: 10 },
@@ -176,6 +177,38 @@
 
   function allocId() {
     return nextId++;
+  }
+
+  // 目的地（国家）的默认值：出厂 meta 里没有的（用户新增的）就用这套兜底
+  function metaOf(key) {
+    return GROUP_META.find(m => m.key === key) || {};
+  }
+
+  function defaultGroupName(key) {
+    return metaOf(key).name || key;
+  }
+
+  // 新增目的地时生成不重复的 key：英文名直接小写，中文名退化成 g1 / g2 …
+  function allocGroupKey(name) {
+    const ascii = String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    let key = ascii || `g${state.groups.length + 1}`;
+    let n = 2;
+    while (state.groups.some(g => g.key === key)) key = `${ascii || 'g'}${n++}`;
+    return key;
+  }
+
+  // 目的地名称校验：不可为空、不可与别的目的地重名
+  function validateGroupName(name, selfKey) {
+    const clean = String(name === undefined || name === null ? '' : name).trim();
+    if (!clean) throw new Error('目的地名称不能为空');
+    if (state.groups.some(g => g.name === clean && g.key !== selfKey)) {
+      throw new Error(`已存在同名目的地：${clean}`);
+    }
+    return clean;
   }
 
   function seedState() {
@@ -332,21 +365,31 @@
   }
 
   // 校验 localStorage 里的数据是否还认得出来；不认得就重新播种
+  // 目的地数量不限（可自由增删），只要求每个目的地自己结构完整
   function validStoredState(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-    if (!Array.isArray(raw.groups) || raw.groups.length !== GROUP_META.length) return false;
-    return GROUP_META.every(meta => {
-      const g = raw.groups.find(x => x && x.key === meta.key);
-      if (!g || !Array.isArray(g.tiers) || !g.tiers.length) return false;
+    if (!Array.isArray(raw.groups) || !raw.groups.length) return false;
+    return raw.groups.every(g => {
+      if (!g || typeof g !== 'object' || !String(g.key || '').trim()) return false;
+      if (!Array.isArray(g.tiers) || !g.tiers.length) return false;
       if (!Array.isArray(g.rows) || !Array.isArray(g.rules)) return false;
       return g.rows.every(r => r && typeof r === 'object' && r.prices && typeof r.prices === 'object');
     });
   }
 
   // 宽容地整理已存数据：数字字段 toNum 兜底、规则逐条 normalize
+  // 目的地按存下来的顺序原样保留（用户新增的不会被丢掉）；缺的字段用出厂 meta 或通用默认值补
   function normalizeStoredState(raw) {
-    const groups = GROUP_META.map(meta => {
-      const g = raw.groups.find(x => x && x.key === meta.key);
+    const seenKeys = new Set();
+    const groups = raw.groups.map(g => {
+      const rawKey = String(g.key || '').trim();
+      // 极端情况下（手工改 localStorage）出现重复 key 就补后缀，避免两个目的地互相覆盖
+      let key = rawKey;
+      let n = 2;
+      while (seenKeys.has(key)) key = `${rawKey}-${n++}`;
+      seenKeys.add(key);
+
+      const meta = metaOf(rawKey);
       const tiers = (g.tiers || []).map(t => {
         const minWeight = toNum(t.min_weight, 0);
         return {
@@ -370,7 +413,7 @@
       });
       const rules = (g.rules || []).map(r => {
         const normalized = normalizeRule(r);
-        return { id: toNum(r.id, 0) || allocId(), group_key: meta.key, ...normalized };
+        return { id: toNum(r.id, 0) || allocId(), group_key: key, ...normalized };
       });
       const combos = Array.isArray(g.combos) ? sanitizeCombos(g.combos, rules) : deriveCombosFromRules(rules);
       // 有独立 maxRules 就直接用；老数据则从规则 / 组合上的 max 迁移过来
@@ -378,13 +421,14 @@
         ? { combos, maxRules: sanitizeMax(g.maxRules, rules) }
         : splitMaxRules(rules, combos);
 
+      const mode = g.mode === 'zip' || g.mode === 'country' ? g.mode : meta.mode || 'country';
       return {
-        key: meta.key,
-        name: meta.name,
-        mode: meta.mode,
-        surchargeMode: meta.surchargeMode,
-        minWeightSingle: Math.max(0, toNum(g.minWeightSingle, meta.minWeightSingle)),
-        minWeightPerBox: Math.max(0, toNum(g.minWeightPerBox, meta.minWeightPerBox)),
+        key,
+        name: String(g.name || meta.name || key).trim() || key,
+        mode,
+        surchargeMode: meta.surchargeMode || 'stack',
+        minWeightSingle: Math.max(0, toNum(g.minWeightSingle, meta.minWeightSingle === undefined ? 10 : meta.minWeightSingle)),
+        minWeightPerBox: Math.max(0, toNum(g.minWeightPerBox, meta.minWeightPerBox === undefined ? 10 : meta.minWeightPerBox)),
         combos: split.combos,
         maxRules: split.maxRules,
         tiers,
@@ -720,9 +764,13 @@
     let row = null;
     if (group.mode === 'zip') {
       const first = String(selection.zip || '').trim()[0];
-      if (!/[0-9]/.test(first || '')) throw new Error('无法识别的美国邮编，请检查输入');
+      if (!/[0-9]/.test(first || '')) throw new Error(`请输入「${group.name}」的邮编（按首字符匹配区域）`);
       row = group.rows.find(r => `,${r.match_key || ''},`.includes(`,${first},`));
-      if (!row) throw new Error('无法识别的美国邮编，请检查输入');
+      if (!row) {
+        throw new Error(
+          `「${group.name}」里没有邮编 ${first} 开头的区域，请到「价格管理」补充对应区域行，或换一个邮编`
+        );
+      }
     } else {
       row = group.rows.find(r => r.id === Number(selection.rowId));
       if (!row) throw new Error('请选择目的地');
@@ -830,6 +878,11 @@
     const group = findGroup(data.groupKey);
     if (!group) throw new Error('未知的目的地');
 
+    // 目的地改名（与单价表、规则一起随本页保存）
+    if (data.name !== undefined && String(data.name).trim() !== group.name) {
+      group.name = validateGroupName(data.name, group.key);
+    }
+
     // 起算重量：一箱起算 / 多箱每箱起算
     if (data.minWeightSingle !== undefined && data.minWeightSingle !== '') {
       group.minWeightSingle = Math.max(0, toNum(data.minWeightSingle, 0));
@@ -885,6 +938,51 @@
     group.rows = group.rows.filter(r => r.id !== Number(rowId));
     persist();
     return getGroupConfig(groupKey);
+  }
+
+  // ---------- 目的地（国家）增删 ----------
+
+  // 新目的地：默认阶梯 10 / 21 / 101KG+，一个地区行，没有规则（规则到页面上再加）
+  function addGroup(name, mode) {
+    const cleanName = validateGroupName(name, null);
+    const cleanMode = mode === 'zip' ? 'zip' : 'country';
+    const key = allocGroupKey(cleanName);
+    const tiers = [10, 21, 101].map(w => ({ id: allocId(), min_weight: w, label: `${w}KG+` }));
+    const row = {
+      id: allocId(),
+      row_name: cleanMode === 'zip' ? '区域1' : cleanName,
+      match_key: cleanMode === 'zip' ? '' : null,
+      prices: {},
+    };
+    tiers.forEach(t => {
+      row.prices[t.id] = 0;
+    });
+
+    const group = {
+      key,
+      name: cleanName,
+      mode: cleanMode,
+      surchargeMode: 'stack',
+      minWeightSingle: 10,
+      minWeightPerBox: 10,
+      combos: [],
+      maxRules: [],
+      tiers,
+      rows: [row],
+      rules: [],
+    };
+    state.groups.push(group);
+    persist();
+    return getGroupConfig(key);
+  }
+
+  function deleteGroup(groupKey) {
+    if (state.groups.length <= 1) throw new Error('至少要保留一个目的地');
+    const index = state.groups.findIndex(g => g.key === groupKey);
+    if (index < 0) throw new Error('未知的目的地');
+    state.groups.splice(index, 1);
+    persist();
+    return true;
   }
 
   function setVolDivisor(value) {
@@ -960,19 +1058,23 @@
 
     const seen = new Set();
     const plans = payload.groups.map(item => {
-      if (!item || typeof item !== 'object' || !item.key) {
+      if (!item || typeof item !== 'object' || !String(item.key || '').trim()) {
         throw new Error('存在缺少 key 的目的地配置');
       }
-      const meta = GROUP_META.find(m => m.key === item.key);
-      if (!meta) throw new Error(`配置里有未知的目的地：${item.key}`);
-      if (seen.has(item.key)) throw new Error(`配置里目的地重复：${item.key}`);
-      seen.add(item.key);
+      // 目的地可以自行新增，配置里出现出厂没有的 key 也照收
+      const key = String(item.key).trim();
+      const meta = metaOf(key);
+      if (seen.has(key)) throw new Error(`配置里目的地重复：${key}`);
+      seen.add(key);
+
+      const name = String(item.name || meta.name || key).trim();
+      const mode = item.mode === 'zip' || item.mode === 'country' ? item.mode : meta.mode || 'country';
 
       const tiers = (Array.isArray(item.tiers) ? item.tiers : []).map(t => ({
         min_weight: toNum(t.min_weight, 0),
         label: t.label || `${toNum(t.min_weight, 0)}KG+`,
       }));
-      if (!tiers.length) throw new Error(`「${meta.name}」缺少报价阶梯`);
+      if (!tiers.length) throw new Error(`「${name}」缺少报价阶梯`);
 
       const rows = (Array.isArray(item.rows) ? item.rows : []).map(r => {
         const prices = {};
@@ -994,11 +1096,11 @@
         : splitMaxRules(rules, combos);
 
       return {
-        key: meta.key,
-        name: meta.name,
-        mode: meta.mode,
-        minWeightSingle: Math.max(0, toNum(item.minWeightSingle, meta.minWeightSingle)),
-        minWeightPerBox: Math.max(0, toNum(item.minWeightPerBox, meta.minWeightPerBox)),
+        key,
+        name,
+        mode,
+        minWeightSingle: Math.max(0, toNum(item.minWeightSingle, meta.minWeightSingle === undefined ? 10 : meta.minWeightSingle)),
+        minWeightPerBox: Math.max(0, toNum(item.minWeightPerBox, meta.minWeightPerBox === undefined ? 10 : meta.minWeightPerBox)),
         combos: split.combos,
         maxRules: split.maxRules,
         tiers,
@@ -1040,7 +1142,7 @@
         key: plan.key,
         name: plan.name,
         mode: plan.mode,
-        surchargeMode: (GROUP_META.find(m => m.key === plan.key) || {}).surchargeMode,
+        surchargeMode: metaOf(plan.key).surchargeMode || 'stack',
         minWeightSingle: plan.minWeightSingle,
         minWeightPerBox: plan.minWeightPerBox,
         combos: plan.combos,
@@ -1103,6 +1205,8 @@
     calculate: data =>
       Promise.resolve(calculateGroup(data.groupKey, { zip: data.zip, rowId: data.rowId }, data.boxes)),
     saveGroup: data => Promise.resolve(saveGroupConfig(data)),
+    addGroup: data => Promise.resolve(addGroup(data && data.name, data && data.mode)),
+    deleteGroup: data => Promise.resolve(deleteGroup(data && data.groupKey)),
     addRateRow: data => Promise.resolve(addRateRow(data.groupKey, data.name, data.matchKey)),
     deleteRateRow: data => Promise.resolve(deleteRateRow(data.groupKey, data.rowId)),
     setVolDivisor: value => Promise.resolve(setVolDivisor(value)),
