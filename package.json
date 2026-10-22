@@ -1,12 +1,46 @@
 {
   "name": "freight-master",
   "version": "2.0.0",
-  "description": "运费大师 - 美国/欧洲海运运费计算器（纯前端网页版，可直接部署 GitHub Pages）",
+  "description": "运费大师 - 美国/欧洲海运运费计算器（纯前端网页版，可直接部署 GitHub Pages，也可打包成桌面应用）",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "start": "node scripts/dev-server.mjs",
-    "serve": "node scripts/dev-server.mjs"
+    "serve": "node scripts/dev-server.mjs",
+    "dev": "electron .",
+    "build": "electron-builder --dir",
+    "build:installer": "electron-builder"
   },
   "author": "Freight Master",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.freightmaster.app",
+    "productName": "运费大师",
+    "copyright": "Copyright © Freight Master",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "app.js",
+      "renderer.js",
+      "styles.css",
+      "package.json",
+      "electron/**"
+    ],
+    "win": {
+      "target": ["dir"],
+      "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": ["dir"]
+    },
+    "linux": {
+      "target": ["dir"]
+    }
+  }
 }

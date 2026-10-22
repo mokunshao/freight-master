@@ -5,6 +5,7 @@ Thumbs.db
 # 本地开发产生的文件
 *.log
 node_modules/
+dist/
 
 # 桌面版遗留的本地数据库与导出文件（含报价数据，别误提交到公开仓库）
 freight-master.db

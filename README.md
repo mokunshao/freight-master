@@ -2,7 +2,8 @@
 
 一个**纯前端网页应用**，用于快速计算美国、欧洲、加拿大、英国、澳大利亚的海运运费。零依赖、零构建，一个静态目录即可托管——可以直接部署到 **GitHub Pages**。价格与附加费规则都在页面里修改，自动保存在浏览器 `localStorage`。
 
-> 旧版是 Electron 桌面应用（git 历史里可找到）。如需把桌面版的配置搬到网页版：桌面端「导出配置」生成 JSON，再到网页版「导入配置」即可，格式完全互通。
+> 也可以打包成**桌面应用**：`npm run build` 会生成一个免安装文件夹（含 `.exe` 及相关文件），整个文件夹拷走即可运行，见「[打包成桌面应用](#打包成桌面应用electron)」。
+> 旧版 Electron 桌面应用的配置与现在完全互通：桌面端「导出配置」→ 这里「导入配置」即可。
 
 ## 功能
 
@@ -239,10 +240,32 @@
 
 ## 本地开发
 
+网页版本身零依赖、零构建，任何静态服务器都能跑：
+
 ```bash
 cd freight-master
 npm start        # http://localhost:5173（零依赖静态服务，也可用任何静态服务器）
 ```
+
+只有**桌面应用**需要装依赖（首次执行一次即可）：
+
+```bash
+npm install      # 安装 electron / electron-builder，约 300MB，只需一次
+npm run dev      # 以桌面窗口方式启动（相当于 electron .）
+```
+
+## 打包成桌面应用（Electron）
+
+```bash
+npm run build
+```
+
+产物：`dist/win-unpacked/`，里面是 **`运费大师.exe` + 相关的 dll / pak / resources 文件**。把整个 `dist/win-unpacked` 文件夹拷到任意电脑双击 `运费大师.exe` 即可运行，**免安装、不需要 Node**。
+
+- `npm run build:installer` 额外生成 NSIS 安装包（`dist/运费大师 Setup x.y.z.exe`），需要下载 NSIS 组件
+- 主进程是 `electron/main.cjs`：它会在 `127.0.0.1` 上起一个临时静态服务再加载页面 —— **不能直接用 `file://` 打开**，因为 Chromium 在 `file://`（不透明源）下会禁用 `localStorage`，而配置全存在 `localStorage` 里
+- 打包配置写在 `package.json` 的 `build` 字段；`win.signAndEditExecutable` 设为 `false`，这样**不需要管理员权限或开发者模式**也能打包（代价是 exe 内部版本信息保留 Electron 默认值，窗口标题与程序名仍是「运费大师」）
+- 想改 exe 的图标 / 版本信息：给 `build.win` 加 `"icon": "build/icon.ico"`，并把 `signAndEditExecutable` 改回 `true`（此时需要以管理员身份运行，或在系统里开启「开发者模式」）
 
 ## 部署到 GitHub Pages
 
@@ -273,9 +296,11 @@ npm start        # http://localhost:5173（零依赖静态服务，也可用任�
 | `app.js` | 核心：默认数据、localStorage 持久化、运费计算、配置导入导出，并暴露 `window.freightApi` |
 | `renderer.js` | 全部页面交互逻辑，只通过 `window.freightApi` 读写数据 |
 | `scripts/dev-server.mjs` | 本地静态预览服务（部署用不到） |
+| `electron/main.cjs` | 桌面应用主进程：起本地静态服务 + 开窗口（打包才用得到） |
+| `package.json` | 脚本（`start` / `dev` / `build`）与 electron-builder 打包配置 |
 
 ## 技术栈
 
 - 原生 HTML / CSS / JavaScript，**零依赖、零构建**
 - 数据持久化：浏览器 `localStorage`
-- 托管：任意静态空间（GitHub Pages 等）
+- 托管：任意静态空间（GitHub Pages 等）；桌面版由 Electron 承载同一套页面（`electron/main.cjs` + electron-builder）
