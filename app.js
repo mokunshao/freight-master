@@ -940,23 +940,59 @@
     return getGroupConfig(groupKey);
   }
 
+  // ---------- 阶梯（价格列）数量 ----------
+
+  const MAX_TIERS = 12;
+
+  // 各列默认的起始重量：3 列 = 10/21/101（除美国外的默认值），4 列 = 10/21/71/101（美国的默认值）
+  // 更多列在 101 之后每档 +100，起始重量都能在表头直接改
+  function defaultTierWeights(count) {
+    const presets = { 1: [10], 2: [10, 21], 3: [10, 21, 101], 4: [10, 21, 71, 101] };
+    if (presets[count]) return presets[count].slice();
+    const list = [10, 21, 71, 101];
+    let last = list[list.length - 1];
+    while (list.length < count) {
+      last += 100;
+      list.push(last);
+    }
+    return list;
+  }
+
+  // 设置单价表的列数：阶梯 id 按位置复用，行里的单价跟着位置走；多出来的列补 0
+  function setTierCount(groupKey, count) {
+    const group = findGroup(groupKey);
+    if (!group) throw new Error('未知的目的地');
+    const total = toNum(count, 0);
+    if (!Number.isInteger(total) || total < 1 || total > MAX_TIERS) {
+      throw new Error(`阶梯列数需要在 1 ~ ${MAX_TIERS} 之间`);
+    }
+    const ladder = defaultTierWeights(total);
+    const tiers = ladder.map((w, i) => ({
+      id: group.tiers[i] ? group.tiers[i].id : allocId(),
+      min_weight: w,
+      label: `${w}KG+`,
+    }));
+    group.rows.forEach(row => {
+      const old = row.prices || {};
+      const prices = {};
+      tiers.forEach(t => {
+        prices[t.id] = toNum(old[t.id], 0);
+      });
+      row.prices = prices;
+    });
+    group.tiers = tiers;
+    persist();
+    return getGroupConfig(groupKey);
+  }
+
   // ---------- 目的地（国家）增删 ----------
 
-  // 新目的地：默认阶梯 10 / 21 / 101KG+，一个地区行，没有规则（规则到页面上再加）
+  // 新目的地：默认阶梯 10 / 21 / 101KG+，**不带地区行**（点「+ 新增地区」建第一行时会先问列数），没有规则
   function addGroup(name, mode) {
     const cleanName = validateGroupName(name, null);
     const cleanMode = mode === 'zip' ? 'zip' : 'country';
     const key = allocGroupKey(cleanName);
     const tiers = [10, 21, 101].map(w => ({ id: allocId(), min_weight: w, label: `${w}KG+` }));
-    const row = {
-      id: allocId(),
-      row_name: cleanMode === 'zip' ? '区域1' : cleanName,
-      match_key: cleanMode === 'zip' ? '' : null,
-      prices: {},
-    };
-    tiers.forEach(t => {
-      row.prices[t.id] = 0;
-    });
 
     const group = {
       key,
@@ -968,7 +1004,7 @@
       combos: [],
       maxRules: [],
       tiers,
-      rows: [row],
+      rows: [],
       rules: [],
     };
     state.groups.push(group);
@@ -1209,6 +1245,7 @@
     deleteGroup: data => Promise.resolve(deleteGroup(data && data.groupKey)),
     addRateRow: data => Promise.resolve(addRateRow(data.groupKey, data.name, data.matchKey)),
     deleteRateRow: data => Promise.resolve(deleteRateRow(data.groupKey, data.rowId)),
+    setTierCount: data => Promise.resolve(setTierCount(data.groupKey, data.count)),
     setVolDivisor: value => Promise.resolve(setVolDivisor(value)),
     resetDatabase: () => Promise.resolve(resetDatabase()),
     exportConfig: async () => {

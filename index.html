@@ -70,7 +70,6 @@
         <div class="actions">
           <button id="btn-add-box" class="btn btn-primary">+ 添加箱规</button>
           <button id="btn-clear-boxes" class="btn btn-danger">清空箱规</button>
-          <button id="btn-clear-all" class="btn btn-danger">一键清空（箱规 + 目的地）</button>
           <button id="btn-calc" class="btn btn-primary">开始计算</button>
         </div>
 
@@ -140,7 +139,7 @@
           <div class="actions">
             <button id="btn-add-group-confirm" class="btn btn-primary btn-sm">确定新增</button>
             <button id="btn-add-group-cancel" class="btn btn-secondary btn-sm">取消</button>
-            <span class="hint">新增后默认带 10 / 21 / 101KG+ 三档阶梯和一个地区行，单价请先到页面里填写。</span>
+            <span class="hint">新增后默认带 10 / 21 / 101KG+ 三档阶梯，不带地区行：点「+ 新增地区」建第一行时会先问要几列阶梯（默认 3）。</span>
           </div>
         </div>
         <nav class="sub-tabs" id="group-tabs"></nav>
@@ -156,6 +155,19 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <!-- 离开「价格管理」时的未保存改动提醒：保存并切换 / 丢弃修改并切换 / 取消 -->
+  <div id="unsaved-modal" class="modal-mask" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="unsaved-title">
+      <div class="modal-title" id="unsaved-title">「价格管理」有未保存的改动</div>
+      <div class="modal-text" id="unsaved-text"></div>
+      <div class="modal-actions">
+        <button id="unsaved-save" class="btn btn-primary btn-sm">保存并切换</button>
+        <button id="unsaved-discard" class="btn btn-danger btn-sm">丢弃修改并切换</button>
+        <button id="unsaved-cancel" class="btn btn-secondary btn-sm">取消（继续编辑）</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 网页版核心：配置存 localStorage，暴露 window.freightApi（接口与旧桌面端一致） -->
   <script src="app.js"></script>

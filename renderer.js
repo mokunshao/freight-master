@@ -133,7 +133,6 @@ const boxesBody = document.getElementById('boxes-body');
 const boxHint = document.getElementById('box-hint');
 const btnAddBox = document.getElementById('btn-add-box');
 const btnClearBoxes = document.getElementById('btn-clear-boxes');
-const btnClearAll = document.getElementById('btn-clear-all');
 const btnCalc = document.getElementById('btn-calc');
 
 const resultCard = document.getElementById('result');
@@ -157,10 +156,53 @@ const btnAddGroupCancel = document.getElementById('btn-add-group-cancel');
 
 const toast = document.getElementById('toast');
 
+// 未保存改动的确认弹窗（保存并切换 / 丢弃修改并切换 / 取消）
+const unsavedModal = document.getElementById('unsaved-modal');
+const unsavedText = document.getElementById('unsaved-text');
+const btnUnsavedSave = document.getElementById('unsaved-save');
+const btnUnsavedDiscard = document.getElementById('unsaved-discard');
+const btnUnsavedCancel = document.getElementById('unsaved-cancel');
+
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), 4000);
+}
+
+// 返回 'save' | 'discard' | 'cancel'
+function askUnsavedChanges(message) {
+  return new Promise(resolve => {
+    unsavedText.textContent = `${message}保存后才会生效；丢弃会回到最近一次保存的状态。`;
+    unsavedModal.hidden = false;
+    btnUnsavedSave.focus();
+
+    const onSave = () => finish('save');
+    const onDiscard = () => finish('discard');
+    const onCancel = () => finish('cancel');
+    const onMask = e => {
+      if (e.target === unsavedModal) finish('cancel');
+    };
+    const onKey = e => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      finish('cancel');
+    };
+    const finish = choice => {
+      unsavedModal.hidden = true;
+      btnUnsavedSave.removeEventListener('click', onSave);
+      btnUnsavedDiscard.removeEventListener('click', onDiscard);
+      btnUnsavedCancel.removeEventListener('click', onCancel);
+      unsavedModal.removeEventListener('click', onMask);
+      document.removeEventListener('keydown', onKey);
+      resolve(choice);
+    };
+
+    btnUnsavedSave.addEventListener('click', onSave);
+    btnUnsavedDiscard.addEventListener('click', onDiscard);
+    btnUnsavedCancel.addEventListener('click', onCancel);
+    unsavedModal.addEventListener('click', onMask);
+    document.addEventListener('keydown', onKey);
+  });
 }
 
 function formatMoney(n) {
@@ -251,15 +293,6 @@ btnClearBoxes.addEventListener('click', () => {
   renderBoxes();
   resultCard.style.display = 'none';
   showToast('箱规已清空');
-});
-
-btnClearAll.addEventListener('click', () => {
-  boxes = [createBox()];
-  renderBoxes();
-  zipInput.value = '';
-  if (countrySelect.options.length) countrySelect.selectedIndex = 0;
-  resultCard.style.display = 'none';
-  showToast('箱规与目的地已清空');
 });
 
 // ---------- 批量导入箱规 ----------
@@ -384,14 +417,18 @@ function renderGroupOptions() {
 function renderCountryOptions() {
   const group = currentGroupMeta();
   const current = countrySelect.value;
+  const rows = group ? group.rows : [];
   countrySelect.innerHTML = '';
-  (group ? group.rows : []).forEach(row => {
+  rows.forEach(row => {
     const option = document.createElement('option');
     option.value = row.id;
     option.textContent = row.row_name;
     countrySelect.appendChild(option);
   });
-  if (current) countrySelect.value = current;
+  // 之前选的地区还在就保留，否则默认选中第一个（不会出现「一个都没选中」的空状态）
+  const keep = current && rows.some(row => String(row.id) === String(current));
+  if (keep) countrySelect.value = current;
+  else countrySelect.selectedIndex = rows.length ? 0 : -1;
 }
 
 function switchGroup() {
@@ -406,12 +443,75 @@ function switchGroup() {
 
 groupSelect.addEventListener('change', switchGroup);
 
+// ---------- 顶部 tab 切换（离开「价格管理」前先处理未保存的改动） ----------
+function activateTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('panel-' + name);
+  if (panel) panel.classList.add('active');
+}
+
+// 把所有有未保存改动的目的地 + 体积重系数一起写入
+async function saveAllDirty() {
+  const dirtyGroups = config.groups.filter(isGroupDirty);
+  for (const group of dirtyGroups) {
+    const updated = await api.saveGroup(collectGroup(group));
+    Object.assign(group, updated);
+    rememberSaved(group);
+  }
+  if (isVolDivisorDirty()) {
+    const value = Number(volDivisorInput.value);
+    if (!value || value <= 0) throw new Error('体积重系数必须大于 0，请先改正再离开「价格管理」');
+    await api.setVolDivisor(value);
+    config.volDivisor = value;
+  }
+  // 保存后：标签栏 / 计算页下拉 / 页面内容都按最新配置重绘
+  renderGroupTabs();
+  renderGroupPanel();
+  renderGroupOptions();
+  renderCountryOptions();
+  updateDirtyIndicators();
+}
+
+// 丢弃改动 = 回到最近一次保存的状态（新增 / 删除地区是即时写入的，不受影响）
+async function discardDirty() {
+  config = await api.getConfig();
+  refreshData();
+  switchGroup();
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  tab.addEventListener('click', async () => {
+    const target = tab.dataset.tab;
+    const current = document.querySelector('.tab.active');
+    if (current && current.dataset.tab === target) return;
+
+    // 只在「离开价格管理」时拦一下，回价格管理不需要
+    if (current && current.dataset.tab === 'data' && target !== 'data') {
+      const dirtyGroups = config.groups.filter(isGroupDirty);
+      const volDirty = isVolDivisorDirty();
+      if (dirtyGroups.length || volDirty) {
+        const parts = [];
+        if (dirtyGroups.length) parts.push(`「${dirtyGroups.map(g => g.name).join('」「')}」`);
+        if (volDirty) parts.push('体积重系数');
+        const choice = await askUnsavedChanges(`${parts.join('、')}有未保存的改动。`);
+        if (choice === 'cancel') return; // 留在「价格管理」继续编辑
+        if (choice === 'save') {
+          try {
+            await saveAllDirty();
+            showToast('已保存改动，已切换到「运费计算」');
+          } catch (err) {
+            showToast(err.message || '保存失败，已留在「价格管理」');
+            return;
+          }
+        } else {
+          await discardDirty();
+          showToast('已丢弃未保存的改动');
+        }
+      }
+    }
+
+    activateTab(target);
   });
 });
 
@@ -511,9 +611,13 @@ async function runCalculate() {
   }
 
   const payload = { groupKey: group.key, boxes: filled };
+  if (!group.rows.length) {
+    showToast(`「${group.name}」还没有地区行，请先到「价格管理」里添加`);
+    return;
+  }
   if (group.mode === 'zip') {
     if (!zipInput.value.trim()) {
-      showToast('请输入美国邮编');
+      showToast(`请输入「${group.name}」邮编`);
       return;
     }
     payload.zip = zipInput.value.trim();
@@ -606,6 +710,11 @@ function rateTableHtml(group) {
     </div>
     <div class="section-title">${group.name} · 单价表</div>
     ${placeholder ? '<div class="warn">该目的地存在单价为 0 的行，请填写实际报价后再计算。</div>' : ''}
+    ${
+      group.rows.length
+        ? ''
+        : '<div class="warn">还没有地区行，点下方「+ 新增地区」创建第一行 —— 会先问这张表要几列价格阶梯（默认 3 列：10 / 21 / 101KG+）。</div>'
+    }
     <div class="table-wrap">
       <table>
         <thead>
@@ -639,7 +748,7 @@ function rateTableHtml(group) {
     </div>
     <div class="actions">
       <button class="btn btn-primary btn-sm btn-add-row">+ 新增地区</button>
-      <span class="hint">表头数字即各阶梯的起始重量（只决定单价档位）；最低计费重请到页面上方「起算重量」里设置。</span>
+      <span class="hint">表头数字即各阶梯的起始重量（只决定单价档位，可直接改）；列数在创建第一行时确定，最低计费重请到页面上方「起算重量」里设置。</span>
     </div>
   `;
 }
@@ -1209,6 +1318,22 @@ groupPanels.addEventListener('click', async e => {
       updateDirtyIndicators();
       showToast(`已删除目的地「${group.name}」`);
     } else if (e.target.classList.contains('btn-add-row')) {
+      // 这张表还没有任何地区行时，先问清楚要几列价格阶梯（默认 3 列：10 / 21 / 101KG+）
+      if (!group.rows.length) {
+        const answer = prompt(
+          `「${group.name}」还没有任何地区行。\n请输入价格阶梯（列）的数量（1 ~ 12）：`,
+          String(group.tiers.length || 3)
+        );
+        if (answer === null) return; // 取消 = 不新增
+        const count = Number(String(answer).trim());
+        if (!Number.isInteger(count) || count < 1 || count > 12) {
+          showToast('阶梯列数需要在 1 ~ 12 之间');
+          return;
+        }
+        if (count !== group.tiers.length) {
+          Object.assign(group, await api.setTierCount({ groupKey: group.key, count }));
+        }
+      }
       const updated = await api.addRateRow({ groupKey: group.key, name: '新增地区' });
       Object.assign(group, updated);
       renderGroupPanel();
@@ -1339,7 +1464,7 @@ async function createGroup() {
     renderGroupOptions();
     switchGroup();
     updateDirtyIndicators();
-    showToast(`已新增目的地「${created.name}」，请填写单价与附加费规则后保存`);
+    showToast(`已新增目的地「${created.name}」，点「+ 新增地区」建第一行（可先定阶梯列数）后再填写单价`);
   } catch (err) {
     showToast(err.message || '新增目的地失败');
   }
