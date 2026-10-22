@@ -663,6 +663,7 @@ function ruleTableHtml(group) {
     </div>
     <div class="hint">选了「重量」或「边长」后，该主字段下的次级字段会全部列出，<b>每个次级字段都可以不填</b>（留空 = 不参与判断）；填了的次级字段<b>任意一个满足，整条规则就命中，只收一次金额</b>。一条都没填的规则不会命中。</div>
     ${combinationsHtml(group)}
+    ${mutexHtml(group)}
     ${maxRulesHtml(group)}
     <div class="form-row">
       <div class="form-group">
@@ -686,7 +687,12 @@ function deriveCombosFromRules(rules) {
     const name = String(r.rule_group || '').trim();
     if (!name) return;
     if (!map.has(name)) {
-      map.set(name, { name, mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add', indexes: [] });
+      map.set(name, {
+        name,
+        mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
+        indexes: [],
+        exclusive: [], // 老数据推导出来的组合互不排斥
+      });
     }
     map.get(name).indexes.push(i);
   });
@@ -713,23 +719,94 @@ function comboMemberIdx(group) {
 
 // 当前组合列表（下标过滤掉越界的）
 function buildCombos(group) {
-  return groupCombos(group).map(c => ({
+  const total = groupCombos(group).length;
+  return groupCombos(group).map((c, ci) => ({
     name: String(c.name || '').trim(),
     mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
     indexes: (c.indexes || []).filter(i => group.rules[i]),
+    // 关系是对称的：A 勾了 B，B 这一行也会自动勾上 A
+    exclusive: Array.from(new Set(c.exclusive || []))
+      .filter(i => i >= 0 && i < total && i !== ci)
+      .sort((a, b) => a - b),
   }));
 }
 
-// 写回：组合自己持有「名字 + 行为 + 成员下标」，不碰规则的 rule_group / combine_mode
+// 写回：组合自己持有「名字 + 行为 + 成员下标 + 不与…叠加」，不碰规则的 rule_group / combine_mode
 // 空组合也要保留（刚「+ 新增组合」还没勾规则时不能消失）
 function applyCombos(group, combos) {
-  group.combos = combos.map(c => ({
+  const total = combos.length;
+  group.combos = combos.map((c, ci) => ({
     name: String(c.name || '').trim() || '(未命名)',
     mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
     indexes: Array.from(new Set(c.indexes || []))
       .filter(i => group.rules[i])
       .sort((a, b) => a - b),
+    exclusive: Array.from(new Set(c.exclusive || []))
+      .filter(i => i >= 0 && i < total && i !== ci)
+      .sort((a, b) => a - b),
   }));
+  // 「不与…叠加」是双向关系：勾一边，另一边同步补上
+  group.combos.forEach((c, ci) => {
+    c.exclusive.forEach(other => {
+      if (group.combos[other] && !group.combos[other].exclusive.includes(ci)) {
+        group.combos[other].exclusive.push(ci);
+        group.combos[other].exclusive.sort((a, b) => a - b);
+      }
+    });
+  });
+}
+
+// 互斥规则定义区：用组合序号定义「哪些组合之间不能同时收费」（双向，勾一格两边都生效）
+function mutexHtml(group) {
+  const combos = buildCombos(group);
+  const title = `<div class="section-title">${group.name} · 互斥规则（不与…叠加）</div>`;
+
+  if (combos.length < 2) {
+    return `${title}<div class="hint">至少要有 2 个组合才能定义互斥关系（现在 ${combos.length} 个）。</div>`;
+  }
+
+  const head = combos.map((c, i) => `<th style="width:60px" title="${escapeAttr(c.name)}">#${i + 1}</th>`).join('');
+  const body = combos
+    .map(
+      (c, i) => `
+      <tr>
+        <th class="mutex-row-head"><span class="combo-seq">#${i + 1}</span>${escapeHtml(c.name)}</th>
+        ${combos
+          .map((other, j) => {
+            if (i === j) return '<td class="mutex-diag">—</td>';
+            const on = (c.exclusive || []).includes(j);
+            return `<td><input type="checkbox" data-field="mutex_cb" data-combo-idx="${i}" data-other-idx="${j}" ${
+              on ? 'checked' : ''
+            } title="组合 #${i + 1}「${escapeAttr(c.name)}」不与 组合 #${j + 1}「${escapeAttr(other.name)}」叠加"></td>`;
+          })
+          .join('')}
+      </tr>`
+    )
+    .join('');
+
+  // 已定义的关系汇总（只列一次，避免 A⇄B / B⇄A 重复）
+  const pairs = [];
+  combos.forEach((c, i) => {
+    (c.exclusive || []).forEach(j => {
+      if (j > i && combos[j]) pairs.push(`#${i + 1} ${c.name} ⇄ #${j + 1} ${combos[j].name}`);
+    });
+  });
+
+  return `
+    ${title}
+    <div class="hint">交叉格打勾 = 这两个组合<b>不能同时收费</b>（双向关系，勾一格两边都生效）。命中时会在互不冲突的前提下收<b>金额总和最大</b>的一组，没被收的组合在结果明细里注明「未计入」。<b>卡派</b>不受互斥影响，永远独立累加；「不叠加取最高」命中时，所有叠加 / 不叠加组合都不计。</div>
+    <div class="table-wrap">
+      <table class="mutex-table">
+        <thead><tr><th class="mutex-row-head">组合</th>${head}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    <div class="hint">${
+      pairs.length
+        ? `已定义 ${pairs.length} 组互斥：${pairs.map(p => escapeHtml(p)).join('；')}`
+        : '还没定义任何互斥关系 —— 所有组合之间默认叠加。'
+    }</div>
+  `;
 }
 
 // 规则组组合（新版）：每个组合一行，里面用复选框选规则
@@ -751,6 +828,7 @@ function combinationsHtml(group) {
       (c, ci) => `
       <div class="combo-row" data-combo-idx="${ci}">
         <div class="combo-line">
+          <span class="combo-seq">#${ci + 1}</span>
           <input type="text" class="combo-name" data-field="combo_name" data-combo-idx="${ci}" value="${escapeAttr(c.name)}">
           <select data-field="combo_mode" data-combo-idx="${ci}">
             ${Object.keys(COMBINE_MODE_LABELS)
@@ -778,6 +856,7 @@ function combinationsHtml(group) {
   return `
     <div class="section-title">${group.name} · 规则组组合</div>
     <div class="hint"><b>一条规则 = 一个整体</b>：它的所有次级字段只占这一个复选框（#序号），满足其一就命中本条，只按本条的金额收一次。<br>
+    <b>组合之间默认叠加</b>；哪两个组合不能同时收费，到下方「互斥规则」区按组合序号打勾（例如 #2 与 #3 互斥，则 #1+ #2+ #3 命中时收金额总和最大的一组）。<br>
     组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选的规则不参与计算。</div>
     <div class="combinations">
       ${rows || '<div class="hint">还没有组合，点「+ 新增组合」创建，再勾选规则编入。</div>'}
@@ -896,6 +975,27 @@ function handleDataInput(e) {
     return;
   }
 
+  // 互斥规则区的勾选：组合 A 不与 组合 B 叠加（双向关系）
+  if (field === 'mutex_cb') {
+    const comboIdx = Number(e.target.dataset.comboIdx);
+    const otherIdx = Number(e.target.dataset.otherIdx);
+    const combos = buildCombos(group);
+    if (comboIdx === otherIdx || !combos[comboIdx] || !combos[otherIdx]) return;
+    // 两边一起改：applyCombos 只会补另一边、不会删，所以取消勾选必须自己把双向都清掉
+    [
+      [comboIdx, otherIdx],
+      [otherIdx, comboIdx],
+    ].forEach(([self, other]) => {
+      const set = new Set(combos[self].exclusive || []);
+      if (e.target.checked) set.add(other);
+      else set.delete(other);
+      combos[self].exclusive = Array.from(set).sort((a, b) => a - b);
+    });
+    applyCombos(group, combos);
+    renderGroupPanel();
+    return;
+  }
+
   // 组合改名 / 改行为：只改组合自己（不再回写成员规则的 rule_group / combine_mode）
   if (field === 'combo_name' || field === 'combo_mode') {
     const comboIdx = Number(e.target.dataset.comboIdx);
@@ -966,10 +1066,14 @@ function collectGroup(group) {
     // 「不叠加取最高」独立提交（优先级最高）
     maxRules: Array.from(new Set(groupMaxRules(group).filter(i => group.rules[i]))).sort((a, b) => a - b),
     // 组合列表（名字 + 行为 + 成员下标）独立提交，与规则表的规则组名无关
-    combos: groupCombos(group).map(c => ({
+    combos: groupCombos(group).map((c, ci) => ({
       name: String(c.name || '').trim(),
       mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
       indexes: Array.from(new Set((c.indexes || []).filter(i => group.rules[i]))).sort((a, b) => a - b),
+      // 「不与…叠加」：本组合不与这些组合同时收费（双向，落库时会补成对称）
+      exclusive: Array.from(new Set(c.exclusive || []))
+        .filter(i => i >= 0 && i !== ci && i < groupCombos(group).length)
+        .sort((a, b) => a - b),
     })),
     rows: group.rows.map(row => ({
       id: row.id,
@@ -1095,13 +1199,25 @@ groupPanels.addEventListener('click', async e => {
       let name = '新组合';
       let i = 2;
       while (usedNames.has(name)) { name = '新组合' + (i++); }
-      groupCombos(group).push({ name, mode: 'add', indexes: [] });
+      groupCombos(group).push({ name, mode: 'add', indexes: [], exclusive: [] });
       renderGroupPanel();
       showToast('已新增组合：填名字、选行为并勾选规则后保存');
     } else if (e.target.classList.contains('btn-delete-combo')) {
       const comboIdx = Number(e.target.dataset.comboIdx);
       // 只删组合本身；成员规则的「规则组」名保持不动（两边不联动），但会变回未编入 = 不生效
-      if (buildCombos(group)[comboIdx]) groupCombos(group).splice(comboIdx, 1);
+      if (!buildCombos(group)[comboIdx]) return;
+      // 组合下标整体前移，其余组合的「不与…叠加」关系要跟着重排
+      applyCombos(
+        group,
+        groupCombos(group)
+          .filter((c, i) => i !== comboIdx)
+          .map(c => ({
+            ...c,
+            exclusive: (c.exclusive || [])
+              .filter(i => i !== comboIdx)
+              .map(i => (i > comboIdx ? i - 1 : i)),
+          }))
+      );
       renderGroupPanel();
     } else if (e.target.classList.contains('btn-save-group')) {
       const updated = await api.saveGroup(collectGroup(group));

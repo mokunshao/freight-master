@@ -131,9 +131,15 @@
       rows: [{ name: '英国 United Kingdom', prices: [0, 0, 0] }],
       rules: [
         { rule_group: '①实重30-40', field: 'weight', conditions: { weight: { min: 30, max: 40 } }, amount: 330, combine_mode: 'add' },
-        // ②③尺寸：三边条件写在同一条规则里（满足其一，只收一次）；围长是另一个主字段，单独一条
-        { rule_group: '②③尺寸', field: 'side', conditions: { longest: { min: 100, max: 150 }, second_longest: { min: 70, max: 100 }, shortest: { min: 60, max: 100 } }, amount: 300, combine_mode: 'not_stack' },
-        { rule_group: '②③尺寸', field: 'girth', conditions: { girth: { min: 300, max: 400 } }, amount: 300, combine_mode: 'not_stack' },
+        // ②尺寸：三边条件写在同一条规则里（满足其一，只收一次）
+        { rule_group: '②尺寸', field: 'side', conditions: { longest: { min: 100, max: 150 }, second_longest: { min: 70, max: 100 }, shortest: { min: 60, max: 100 } }, amount: 300, combine_mode: 'add' },
+        { rule_group: '③围长', field: 'girth', conditions: { girth: { min: 300, max: 400 } }, amount: 300, combine_mode: 'add' },
+      ],
+      // ①与②、①与③都能叠加；②与③互不叠加（各填对方的序号即可，关系是双向的）
+      combos: [
+        { name: '①实重30-40', mode: 'add', indexes: [0], exclusive: [] },
+        { name: '②尺寸', mode: 'add', indexes: [1], exclusive: [2] },
+        { name: '③围长', mode: 'add', indexes: [2], exclusive: [1] },
       ],
     },
     au: {
@@ -185,7 +191,9 @@
         return row;
       });
       const rules = data.rules.map(rule => ({ id: allocId(), group_key: meta.key, ...normalizeRule(rule) }));
-      const split = splitMaxRules(rules, deriveCombosFromRules(rules));
+      // 默认数据可以直接写死组合（含「不与…叠加」关系），没写就按规则组名推导
+      const combos = Array.isArray(data.combos) ? sanitizeCombos(data.combos, rules) : deriveCombosFromRules(rules);
+      const split = splitMaxRules(rules, combos);
       fresh.groups.push({
         key: meta.key,
         name: meta.name,
@@ -250,7 +258,12 @@
       const name = String(r.rule_group || '').trim();
       if (!name) return;
       if (!map.has(name)) {
-        map.set(name, { name, mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add', indexes: [] });
+        map.set(name, {
+          name,
+          mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
+          indexes: [],
+          exclusive: [], // 老数据推导出来的组合互不排斥，需要的话在页面上勾
+        });
       }
       map.get(name).indexes.push(i);
     });
@@ -258,10 +271,12 @@
   }
 
   // 组合自己持有成员下标；老格式（只有 name + mode）按规则组名折算一次
+  // exclusive = 本组合「不与…叠加」的其他组合下标（关系是对称的，这里补成双向）
   function sanitizeCombos(list, rules) {
     const count = (rules || []).length;
+    const total = Array.isArray(list) ? list.length : 0;
     const cleaned = [];
-    (Array.isArray(list) ? list : []).forEach(c => {
+    (Array.isArray(list) ? list : []).forEach((c, ci) => {
       const name = String((c && c.name) || '').trim();
       if (!name) return; // 只丢空名；同名组合是允许的（组合之间独立，按位置区分）
       let indexes = Array.isArray(c.indexes)
@@ -277,7 +292,19 @@
         name,
         mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
         indexes: Array.from(new Set(indexes)).sort((a, b) => a - b),
+        exclusive: (Array.isArray(c && c.exclusive) ? c.exclusive : [])
+          .map(i => toNum(i, -1))
+          .filter(i => i >= 0 && i < total && i !== ci),
       });
+    });
+    // 「不与…叠加」是对称关系：A 勾了 B，就等价于 B 也勾了 A
+    cleaned.forEach((c, ci) => {
+      c.exclusive.forEach(other => {
+        if (cleaned[other] && !cleaned[other].exclusive.includes(ci)) cleaned[other].exclusive.push(ci);
+      });
+    });
+    cleaned.forEach(c => {
+      c.exclusive = Array.from(new Set(c.exclusive)).sort((a, b) => a - b);
     });
     return cleaned;
   }
@@ -489,6 +516,57 @@
     return 'add';
   }
 
+  // 在「不与…叠加」这张冲突图里，挑出**互不冲突且金额总和最大**的一组组合
+  // 例：①330 能与 ②300、③300 叠加，但 ② 与 ③ 勾了互不叠加 → 命中①②③ 收 630，命中②③ 收 300
+  // 组合数很少（一般不超过 10 个），直接枚举所有子集取最优
+  function pickBestCombos(candidates, conflict) {
+    const n = candidates.length;
+    if (!n) return new Set();
+
+    if (n <= 20) {
+      let bestMask = 0;
+      let bestSum = -1;
+      let bestCount = -1;
+      for (let mask = 0; mask < (1 << n); mask++) {
+        let ok = true;
+        for (let i = 0; i < n && ok; i++) {
+          if (!(mask & (1 << i))) continue;
+          for (let j = i + 1; j < n; j++) {
+            if (mask & (1 << j) && conflict(candidates[i].idx, candidates[j].idx)) {
+              ok = false;
+              break;
+            }
+          }
+        }
+        if (!ok) continue;
+        let total = 0;
+        let count = 0;
+        for (let i = 0; i < n; i++) {
+          if (mask & (1 << i)) {
+            total = round2(total + candidates[i].amount);
+            count++;
+          }
+        }
+        // 金额相同时优先收组合更多的一组（明细更完整）
+        if (total > bestSum || (total === bestSum && count > bestCount)) {
+          bestSum = total;
+          bestCount = count;
+          bestMask = mask;
+        }
+      }
+      return new Set(candidates.filter((c, i) => bestMask & (1 << i)));
+    }
+
+    // 组合特别多（>20）时枚举量太大，退化成贪心：金额从高到低，不冲突就收
+    const ordered = candidates.slice().sort((a, b) => b.amount - a.amount);
+    const picked = new Set();
+    ordered.forEach(c => {
+      if (Array.from(picked).some(x => conflict(c.idx, x.idx))) return;
+      picked.add(c);
+    });
+    return picked;
+  }
+
   // 附加费计算：完全由每条规则的「行为」（combine_mode）驱动
   function calculateSurcharge(m, rules) {
     const fields = {
@@ -527,55 +605,90 @@
         detail.push(`提醒：${note(r)}，当前 ${FIELD_LABELS[key] || key} = ${fields[key]}`);
       });
 
-    // 「组」= 规则组组合（成员由组合自己持有，与规则的规则组名无关）
-    const groupKeyOf = r => (r.comboKey !== undefined ? `c${r.comboKey}` : r.comboName || r.rule_group || '');
+    const sum = list => round2(list.reduce((acc, c) => acc + c.amount, 0));
+    const lines = list => list.reduce((acc, c) => acc.concat(c.lines), []);
 
-    // 组内只收最高的一条，不同组之间再相加
-    const groupMax = mode => {
-      const matched = {};
+    // 先按组合归堆，算出每个组合自己的金额：
+    // add = 组内命中的金额相加；not_stack / cardispatch = 组内取最高的一条
+    const byCombo = mode => {
+      const map = new Map();
       enabled
         .filter(r => ruleMode(r) === mode && ruleMatches(r, fields))
         .forEach(r => {
           const amount = toNum(r.amount, 0);
-          const key = groupKeyOf(r);
-          const current = matched[key];
-          if (!current || amount > current.amount) {
-            matched[key] = { amount, rule: r };
+          const line = `${note(r)} → +${amount} 元`;
+          const found = map.get(String(r.comboKey));
+          if (!found) {
+            map.set(String(r.comboKey), { idx: Number(r.comboKey), name: r.comboName || '', amount, lines: [line] });
+            return;
+          }
+          if (mode === 'add') {
+            found.amount = round2(found.amount + amount);
+            found.lines.push(line);
+          } else if (amount > found.amount) {
+            found.amount = amount;
+            found.lines = [line];
           }
         });
-      return Object.values(matched);
+      return Array.from(map.values());
     };
 
-    const sum = list => round2(list.reduce((acc, g) => acc + g.amount, 0));
-    const describe = list => list.map(g => `${note(g.rule)} → +${g.amount} 元`);
+    // 卡派：组内取最高、组间累加，永远不受任何「不叠加」影响
+    const dispatch = byCombo('cardispatch');
 
-    // 卡派：组内取最高、组间累加，永远不受「不叠加取最高」影响
-    const dispatch = groupMax('cardispatch');
-
-    // 不叠加取最高：命中即只收最高的一条，替换掉所有 叠加 / 不叠加 组
-    const exclusive = groupMax('max');
+    // 不叠加取最高：命中即只收最高的一条，所有叠加 / 不叠加组合都不计
+    const exclusive = enabled.filter(r => ruleMode(r) === 'max' && ruleMatches(r, fields));
     if (exclusive.length) {
-      const best = exclusive.reduce((a, b) => (b.amount > a.amount ? b : a));
+      const best = exclusive.reduce((a, b) => (toNum(b.amount, 0) > toNum(a.amount, 0) ? b : a));
       // 取最高区是独立区域，note 里已经带「不叠加取最高」前缀，这里不再重复
-      detail.push(`${note(best.rule)} → +${best.amount} 元`);
+      detail.push(`${note(best)} → +${toNum(best.amount, 0)} 元`);
       return {
         rejected: false,
-        surcharge: round2(best.amount + sum(dispatch)),
-        detail: [...detail, ...describe(dispatch)],
+        surcharge: round2(toNum(best.amount, 0) + sum(dispatch)),
+        detail: [...detail, ...lines(dispatch)],
       };
     }
 
-    // 叠加：命中的每条规则都收 —— 组内累加，不同组之间也累加
-    const add = enabled
-      .filter(r => ruleMode(r) === 'add' && ruleMatches(r, fields))
-      .map(r => ({ amount: toNum(r.amount, 0), rule: r }));
-    // 不叠加：组内只取最高的一条，不同组之间累加
-    const notStack = groupMax('not_stack');
+    // 组合之间的「不与…叠加」：A 勾了 B = A、B 不能同时收（关系对称）
+    const conflicts = new Map(); // 组合下标 → 不与之叠加的组合下标集合
+    enabled.forEach(r => {
+      const idx = Number(r.comboKey);
+      (r.comboExclusive || []).forEach(other => {
+        if (other === idx || Number.isNaN(other)) return;
+        if (!conflicts.has(idx)) conflicts.set(idx, new Set());
+        if (!conflicts.has(other)) conflicts.set(other, new Set());
+        conflicts.get(idx).add(other);
+        conflicts.get(other).add(idx);
+      });
+    });
+    const conflict = (a, b) => {
+      const sa = conflicts.get(a);
+      const sb = conflicts.get(b);
+      return (sa && sa.has(b)) || (sb && sb.has(a)) || false;
+    };
+
+    // 剩下的组合：在「互不冲突」的前提下挑金额总和最大的一组（组合数很少，直接枚举）
+    const candidates = byCombo('add')
+      .concat(byCombo('not_stack'))
+      .filter(c => c.amount > 0);
+    const picked = pickBestCombos(candidates, conflict);
+    const chosen = candidates.filter(c => picked.has(c));
+    const dropped = candidates.filter(c => !picked.has(c));
+
+    chosen.forEach(c => detail.push(...c.lines));
+    dropped.forEach(c => {
+      const partners = chosen.filter(x => conflict(c.idx, x.idx)).map(x => `「${x.name}」`).join('、');
+      detail.push(
+        partners
+          ? `未计入：${c.name} +${c.amount} 元（与 ${partners} 不叠加）`
+          : `未计入：${c.name} +${c.amount} 元（组合冲突，取金额最大的一组）`
+      );
+    });
 
     return {
       rejected: false,
-      surcharge: round2(sum(add) + sum(notStack) + sum(dispatch)),
-      detail: [...detail, ...describe(add), ...describe(notStack), ...describe(dispatch)],
+      surcharge: round2(sum(chosen) + sum(dispatch)),
+      detail: [...detail, ...lines(dispatch)],
     };
   }
 
@@ -628,7 +741,14 @@
       (combo.indexes || []).forEach(idx => {
         const rule = group.rules[idx];
         if (!rule || maxIdx.has(idx)) return;
-        activeRules.push({ ...rule, combine_mode: combo.mode, comboName: combo.name, comboKey: comboIdx });
+        // comboExclusive = 本组合「不与…叠加」的其他组合下标，交给计算端处理组合之间的关系
+        activeRules.push({
+          ...rule,
+          combine_mode: combo.mode,
+          comboName: combo.name,
+          comboKey: comboIdx,
+          comboExclusive: Array.isArray(combo.exclusive) ? combo.exclusive.slice() : [],
+        });
       });
     });
     maxIdx.forEach(idx => {
@@ -797,6 +917,7 @@
           name: c.name,
           mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
           indexes: (c.indexes || []).slice(),
+          exclusive: (c.exclusive || []).slice(),
         })),
         maxRules: (group.maxRules || []).slice(),
         tiers: group.tiers.map(t => ({
