@@ -601,10 +601,7 @@ document.querySelectorAll('.tab').forEach(tab => {
       const dirtyGroups = config.groups.filter(isGroupDirty);
       const volDirty = isVolDivisorDirty();
       if (dirtyGroups.length || volDirty) {
-        const parts = [];
-        if (dirtyGroups.length) parts.push(`「${dirtyGroups.map(g => g.name).join('」「')}」`);
-        if (volDirty) parts.push('体积重系数');
-        const choice = await askUnsavedChanges(`${parts.join('、')}有未保存的改动。`);
+        const choice = await askUnsavedChanges(`${dirtySummary()}有未保存的改动。`);
         if (choice === 'cancel') return; // 留在「价格管理」继续编辑
         if (choice === 'save') {
           try {
@@ -1611,11 +1608,56 @@ groupPanels.addEventListener('change', updateDirtyIndicators);
 volDivisorInput.addEventListener('input', updateDirtyIndicators);
 
 // 关页面 / 刷新前兜底提醒
+// Electron 打包后 beforeunload 只会把窗口卡住（原生 "Leave Site?" 不会出现），所以桌面端改走自绘弹窗
+const isElectronApp = /Electron/i.test(navigator.userAgent || '');
+let allowClose = false; // 用户已经在弹窗里做了决定（保存过 / 确认丢弃）→ 放行
+let closePrompting = false; // 弹窗已经开着，别重复弹
+
+function dirtySummary() {
+  const dirtyGroups = config.groups.filter(isGroupDirty);
+  const volDirty = isVolDivisorDirty();
+  const parts = [];
+  if (dirtyGroups.length) parts.push(`「${dirtyGroups.map(g => g.name).join('」「')}」`);
+  if (volDirty) parts.push('体积重系数');
+  return parts.join('、');
+}
+
+async function confirmCloseWithUnsaved() {
+  closePrompting = true;
+  try {
+    const { action } = await openModal({
+      title: '有未保存的改动',
+      message: `${dirtySummary()}还没保存，关闭窗口会丢失这些改动。`,
+      buttons: [
+        { label: '保存并关闭', value: 'save', style: 'primary' },
+        { label: '不保存，直接关闭', value: 'discard', style: 'danger' },
+        { label: '取消', value: 'cancel', style: 'secondary' },
+      ],
+    });
+    if (action === 'cancel') return;
+    if (action === 'save') {
+      try {
+        await saveAllDirty();
+      } catch (err) {
+        showToast(err.message || '保存失败，窗口没有关闭');
+        return;
+      }
+    }
+    allowClose = true;
+    window.close(); // 桌面端：放行后再关一次
+  } finally {
+    closePrompting = false;
+  }
+}
+
 window.addEventListener('beforeunload', e => {
-  const dirty = config.groups.some(isGroupDirty) || isVolDivisorDirty();
-  if (!dirty) return;
+  if (allowClose) return; // 已经处理过，直接让它关
+  if (!(config.groups.some(isGroupDirty) || isVolDivisorDirty())) return;
   e.preventDefault();
-  e.returnValue = '';
+  e.returnValue = ''; // 浏览器里靠这个弹原生提示
+  if (isElectronApp && !closePrompting) {
+    setTimeout(() => confirmCloseWithUnsaved(), 0); // 桌面端：弹自绘的「保存并关闭 / 直接关闭 / 取消」
+  }
 });
 
 btnReset.addEventListener('click', async () => {

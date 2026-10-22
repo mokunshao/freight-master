@@ -277,6 +277,8 @@ npm run build
 - 打包配置写在 `package.json` 的 `build` 字段；`win.signAndEditExecutable` 设为 `false`，这样**不需要管理员权限或开发者模式**也能打包（代价是 exe 内部版本信息保留 Electron 默认值，窗口标题与程序名仍是「运费大师」）
 - 想改 exe 的图标 / 版本信息：给 `build.win` 加 `"icon": "build/icon.ico"`，并把 `signAndEditExecutable` 改回 `true`（此时需要以管理员身份运行，或在系统里开启「开发者模式」）
 - 页面里**不使用 `window.prompt` / `window.confirm` / `window.alert`**（Electron 里不支持，会直接报错）；所有询问都用页面内自绘的通用弹窗（确认 / 输入阶梯列数 / 未保存改动三选一），网页版与桌面版表现一致
+- 关窗口时的「有未保存改动」提醒：网页版走浏览器原生的 `beforeunload` 提示；桌面版里原生提示不会出现（还会把窗口卡住关不掉），
+  所以会拦住关闭并弹出自绘的「**保存并关闭** / **不保存，直接关闭** / **取消**」，选完再真正关闭窗口
 
 ## 部署到 GitHub Pages
 
