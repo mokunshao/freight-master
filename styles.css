@@ -275,6 +275,18 @@ header p {
   margin: 4px 0;
 }
 
+.surcharge-detail .surcharge-boxes > li {
+  margin-top: 6px;
+}
+
+.surcharge-detail .surcharge-box {
+  font-weight: 700;
+}
+
+.surcharge-detail ul ul {
+  list-style: circle;
+}
+
 .table-wrap {
   overflow-x: auto;
   margin-top: 20px;

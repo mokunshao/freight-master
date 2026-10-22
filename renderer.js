@@ -435,9 +435,17 @@ function renderResult(result) {
   const details = result.boxes.filter(b => b.surchargeDetail && b.surchargeDetail.length);
   if (details.length) {
     surchargeDetail.style.display = 'block';
+    // 每条附加费单独一行（原来用「；」串在一行里，规则一多就不好读）
     surchargeDetail.innerHTML =
-      '<strong>附加费明细：</strong><ul>' +
-      details.map(b => `<li>第 ${b.index} 箱：${b.surchargeDetail.join('；')}</li>`).join('') +
+      '<strong>附加费明细：</strong><ul class="surcharge-boxes">' +
+      details
+        .map(
+          b =>
+            `<li><span class="surcharge-box">第 ${b.index} 箱</span><ul>${b.surchargeDetail
+              .map(d => `<li>${escapeHtml(d)}</li>`)
+              .join('')}</ul></li>`
+        )
+        .join('') +
       '</ul>';
   } else {
     surchargeDetail.style.display = 'none';
