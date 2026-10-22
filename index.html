@@ -156,16 +156,15 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- 离开「价格管理」时的未保存改动提醒：保存并切换 / 丢弃修改并切换 / 取消 -->
-  <div id="unsaved-modal" class="modal-mask" hidden>
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="unsaved-title">
-      <div class="modal-title" id="unsaved-title">「价格管理」有未保存的改动</div>
-      <div class="modal-text" id="unsaved-text"></div>
-      <div class="modal-actions">
-        <button id="unsaved-save" class="btn btn-primary btn-sm">保存并切换</button>
-        <button id="unsaved-discard" class="btn btn-danger btn-sm">丢弃修改并切换</button>
-        <button id="unsaved-cancel" class="btn btn-secondary btn-sm">取消（继续编辑）</button>
+  <!-- 通用弹窗：打包成 Electron 后 window.prompt / window.confirm 用不了，所有询问都走这个自绘弹窗 -->
+  <div id="modal" class="modal-mask" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-title" id="modal-title"></div>
+      <div class="modal-text" id="modal-text"></div>
+      <div id="modal-input-wrap" class="modal-input-wrap" hidden>
+        <input id="modal-input" type="number" step="1">
       </div>
+      <div class="modal-actions" id="modal-actions"></div>
     </div>
   </div>
 

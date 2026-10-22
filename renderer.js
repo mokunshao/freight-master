@@ -156,12 +156,13 @@ const btnAddGroupCancel = document.getElementById('btn-add-group-cancel');
 
 const toast = document.getElementById('toast');
 
-// 未保存改动的确认弹窗（保存并切换 / 丢弃修改并切换 / 取消）
-const unsavedModal = document.getElementById('unsaved-modal');
-const unsavedText = document.getElementById('unsaved-text');
-const btnUnsavedSave = document.getElementById('unsaved-save');
-const btnUnsavedDiscard = document.getElementById('unsaved-discard');
-const btnUnsavedCancel = document.getElementById('unsaved-cancel');
+// 通用弹窗所需的元素（window.prompt / window.confirm 在 Electron 里不可用，一律自绘）
+const modalMask = document.getElementById('modal');
+const modalTitle = document.getElementById('modal-title');
+const modalText = document.getElementById('modal-text');
+const modalInputWrap = document.getElementById('modal-input-wrap');
+const modalInput = document.getElementById('modal-input');
+const modalActions = document.getElementById('modal-actions');
 
 function showToast(msg) {
   toast.textContent = msg;
@@ -169,40 +170,149 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove('show'), 4000);
 }
 
-// 返回 'save' | 'discard' | 'cancel'
-function askUnsavedChanges(message) {
-  return new Promise(resolve => {
-    unsavedText.textContent = `${message}保存后才会生效；丢弃会回到最近一次保存的状态。`;
-    unsavedModal.hidden = false;
-    btnUnsavedSave.focus();
+/**
+ * 通用弹窗：返回 { action, input }
+ * - action：点到的按钮 value（点遮罩 / 按 Esc = 'cancel'）
+ * - input：带输入框时是用户填的原始字符串，否则为 null
+ */
+function openModal(options) {
+  const {
+    title = '',
+    message = '',
+    input = null,
+    buttons = [
+      { label: '确定', value: 'ok', style: 'primary' },
+      { label: '取消', value: 'cancel', style: 'secondary' },
+    ],
+  } = options || {};
 
-    const onSave = () => finish('save');
-    const onDiscard = () => finish('discard');
-    const onCancel = () => finish('cancel');
+  return new Promise(resolve => {
+    modalTitle.textContent = title;
+    modalText.textContent = message;
+    modalActions.innerHTML = '';
+
+    if (input) {
+      modalInputWrap.hidden = false;
+      modalInput.type = input.type || 'number';
+      modalInput.min = input.min === undefined ? '' : input.min;
+      modalInput.max = input.max === undefined ? '' : input.max;
+      modalInput.step = input.step || '1';
+      modalInput.placeholder = input.placeholder || '';
+      modalInput.value = input.value === undefined ? '' : input.value;
+    } else {
+      modalInputWrap.hidden = true;
+      modalInput.value = '';
+    }
+
+    const cleanups = [];
+    const close = (action, value) => {
+      modalMask.hidden = true;
+      cleanups.forEach(fn => fn());
+      resolve({ action, input: value === undefined ? null : value });
+    };
+
+    buttons.forEach(btn => {
+      const el = document.createElement('button');
+      el.className = `btn btn-sm btn-${btn.style || 'secondary'}`;
+      el.textContent = btn.label;
+      const onClick = () => {
+        if (!input) {
+          close(btn.value);
+          return;
+        }
+        const raw = String(modalInput.value).trim();
+        if (raw === '') {
+          showToast('请输入内容');
+          modalInput.focus();
+          return;
+        }
+        if (input.validate) {
+          const err = input.validate(raw);
+          if (err) {
+            showToast(err);
+            modalInput.focus();
+            return;
+          }
+        }
+        close(btn.value, raw);
+      };
+      el.addEventListener('click', onClick);
+      modalActions.appendChild(el);
+      cleanups.push(() => el.removeEventListener('click', onClick));
+    });
+
     const onMask = e => {
-      if (e.target === unsavedModal) finish('cancel');
+      if (e.target === modalMask) close('cancel');
     };
     const onKey = e => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      finish('cancel');
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close('cancel');
+      } else if (e.key === 'Enter' && document.activeElement === modalInput) {
+        e.preventDefault();
+        const primary = modalActions.querySelector('.btn-primary') || modalActions.firstElementChild;
+        if (primary) primary.click();
+      }
     };
-    const finish = choice => {
-      unsavedModal.hidden = true;
-      btnUnsavedSave.removeEventListener('click', onSave);
-      btnUnsavedDiscard.removeEventListener('click', onDiscard);
-      btnUnsavedCancel.removeEventListener('click', onCancel);
-      unsavedModal.removeEventListener('click', onMask);
-      document.removeEventListener('keydown', onKey);
-      resolve(choice);
-    };
-
-    btnUnsavedSave.addEventListener('click', onSave);
-    btnUnsavedDiscard.addEventListener('click', onDiscard);
-    btnUnsavedCancel.addEventListener('click', onCancel);
-    unsavedModal.addEventListener('click', onMask);
+    modalMask.addEventListener('click', onMask);
     document.addEventListener('keydown', onKey);
+    cleanups.push(() => modalMask.removeEventListener('click', onMask));
+    cleanups.push(() => document.removeEventListener('keydown', onKey));
+
+    modalMask.hidden = false;
+    if (input) {
+      modalInput.focus();
+      try {
+        modalInput.select(); // number 类型在部分浏览器里不支持选中，失败忽略
+      } catch (err) {
+        /* 忽略 */
+      }
+    } else if (modalActions.firstElementChild) {
+      modalActions.firstElementChild.focus();
+    }
   });
+}
+
+// 确认框：返回 true（确定）/ false（取消、Esc、点遮罩）
+async function askConfirm(message, options = {}) {
+  const { action } = await openModal({
+    title: options.title || '请确认',
+    message,
+    buttons: [
+      { label: options.okText || '确定', value: 'ok', style: options.danger ? 'danger' : 'primary' },
+      { label: '取消', value: 'cancel', style: 'secondary' },
+    ],
+  });
+  return action === 'ok';
+}
+
+// 输入框（数字）：取消返回 null
+async function askNumber(options) {
+  const { action, input } = await openModal({
+    title: options.title || '请输入',
+    message: options.message || '',
+    input: { value: options.value, min: options.min, max: options.max, step: 1, validate: options.validate },
+    buttons: [
+      { label: options.okText || '确定', value: 'ok', style: 'primary' },
+      { label: '取消', value: 'cancel', style: 'secondary' },
+    ],
+  });
+  if (action !== 'ok') return null;
+  return Number(String(input).trim());
+}
+
+// 未保存改动：返回 'save' | 'discard' | 'cancel'
+async function askUnsavedChanges(message) {
+  const { action } = await openModal({
+    title: '「价格管理」有未保存的改动',
+    message: `${message}保存后才会生效；丢弃会回到最近一次保存的状态。`,
+    buttons: [
+      { label: '保存并切换', value: 'save', style: 'primary' },
+      { label: '丢弃修改并切换', value: 'discard', style: 'danger' },
+      { label: '取消（继续编辑）', value: 'cancel', style: 'secondary' },
+    ],
+  });
+  return action;
 }
 
 function formatMoney(n) {
@@ -1304,9 +1414,11 @@ groupPanels.addEventListener('click', async e => {
   try {
     if (e.target.classList.contains('btn-delete-group')) {
       if (e.target.disabled) return;
-      if (!confirm(`确定删除目的地「${group.name}」吗？它的单价表、附加费规则与起算重量都会一起删除，且不可恢复。`)) {
-        return;
-      }
+      const confirmed = await askConfirm(
+        `确定删除目的地「${group.name}」吗？它的单价表、附加费规则与起算重量都会一起删除，且不可恢复。`,
+        { title: '删除目的地', okText: '删除', danger: true }
+      );
+      if (!confirmed) return;
       await api.deleteGroup({ groupKey: group.key });
       savedSnapshots.delete(group.key);
       config.groups = config.groups.filter(g => g.key !== group.key);
@@ -1320,16 +1432,18 @@ groupPanels.addEventListener('click', async e => {
     } else if (e.target.classList.contains('btn-add-row')) {
       // 这张表还没有任何地区行时，先问清楚要几列价格阶梯（默认 3 列：10 / 21 / 101KG+）
       if (!group.rows.length) {
-        const answer = prompt(
-          `「${group.name}」还没有任何地区行。\n请输入价格阶梯（列）的数量（1 ~ 12）：`,
-          String(group.tiers.length || 3)
-        );
-        if (answer === null) return; // 取消 = 不新增
-        const count = Number(String(answer).trim());
-        if (!Number.isInteger(count) || count < 1 || count > 12) {
-          showToast('阶梯列数需要在 1 ~ 12 之间');
-          return;
-        }
+        const count = await askNumber({
+          title: `「${group.name}」的价格阶梯列数`,
+          message: '这张单价表还没有任何地区行。请输入价格阶梯（列）的数量（1 ~ 12）：',
+          value: String(group.tiers.length || 3),
+          min: 1,
+          max: 12,
+          validate: raw => {
+            const n = Number(String(raw).trim());
+            return Number.isInteger(n) && n >= 1 && n <= 12 ? null : '阶梯列数需要在 1 ~ 12 之间';
+          },
+        });
+        if (count === null) return; // 取消 = 不新增
         if (count !== group.tiers.length) {
           Object.assign(group, await api.setTierCount({ groupKey: group.key, count }));
         }
@@ -1408,9 +1522,13 @@ groupPanels.addEventListener('click', async e => {
       renderCountryOptions();
       showToast(`「${group.name}」已保存`);
     } else if (e.target.classList.contains('btn-reload-group')) {
-      // 重新加载：丢掉本页未保存的改动，回到最近一次保存的状态
-      if (isGroupDirty(group) && !confirm(`「${group.name}」有未保存的改动，重新加载会丢弃这些改动，确定继续吗？`)) {
-        return;
+      // 重新加载：丢掉本页未保存的改动，回到最近一次保存的状态（没改过就直接重载）
+      if (isGroupDirty(group)) {
+        const confirmed = await askConfirm(
+          `「${group.name}」有未保存的改动，重新加载会丢弃这些改动，确定继续吗？`,
+          { title: '重新加载已保存配置', okText: '丢弃并重新加载', danger: true }
+        );
+        if (!confirmed) return;
       }
       const saved = await api.getGroupConfig(group.key);
       Object.assign(group, saved);
@@ -1501,7 +1619,11 @@ window.addEventListener('beforeunload', e => {
 });
 
 btnReset.addEventListener('click', async () => {
-  if (!confirm('确定要恢复默认数据吗？所有自定义价格、规则，以及自己新增的目的地都会丢失（只剩出厂的 5 个）。')) return;
+  const confirmed = await askConfirm(
+    '确定要恢复默认数据吗？所有自定义价格、规则，以及自己新增的目的地都会丢失（只剩出厂的 5 个）。',
+    { title: '恢复默认数据', okText: '恢复默认', danger: true }
+  );
+  if (!confirmed) return;
   await api.resetDatabase();
   config = await api.getConfig();
   refreshData();
@@ -1523,7 +1645,12 @@ btnExport.addEventListener('click', async () => {
 });
 
 btnImport.addEventListener('click', async () => {
-  if (!confirm('导入会覆盖当前所有价格、规则与起算重量，确定继续吗？')) return;
+  const confirmed = await askConfirm('导入会覆盖当前所有价格、规则与起算重量，确定继续吗？', {
+    title: '导入配置',
+    okText: '继续导入',
+    danger: true,
+  });
+  if (!confirmed) return;
   try {
     const res = await api.importConfig();
     if (!res.ok) return;

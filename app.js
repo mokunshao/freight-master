@@ -1207,7 +1207,8 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // 立刻 revoke 会在部分环境（Electron 打包后）打断还没开始的下载，延后释放
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
     return fileName;
   }
 
