@@ -248,6 +248,20 @@
 
 从旧 Electron 桌面版迁移：桌面端「导出配置」→ 网页版「导入配置」即可。
 
+### 桌面版的数据放在哪（便携模式）
+
+桌面版的配置**跟着 exe 所在的文件夹走**：首次运行会在 `运费大师.exe` 旁边建一个 `data` 文件夹，所有价格配置都存这里。
+
+- 把整个文件夹（含 `data`）复制一份 → 复制出来的这份有**自己的一套配置**，和原本那份互不干扰，改一边不会影响另一边
+- 换电脑 / 备份：整个文件夹拷过去即可，不用再导出 JSON
+- 想把桌面版恢复成出厂默认：删掉 exe 旁边的 `data` 文件夹，下次启动就是默认值
+- 菜单「帮助 → 打开数据目录」可以直接打开这个文件夹
+- 只有在写不了的位置（例如用 NSIS 安装包装到 `Program Files`）才会退回系统默认位置 `%APPDATA%\运费大师\`
+- 开发模式（`npm run dev`）不会用 exe 旁的目录，避免往 `node_modules` 里写数据
+
+> 老版本桌面版（数据存在 `%APPDATA%\运费大师\`，以及更早那个随机端口的源）升级上来时，
+> 首次启动会把旧配置自动同步到便携目录一次。如果担心数据出问题，也可以先「导出配置」留个 JSON 备份。
+
 ## 本地开发
 
 网页版本身零依赖、零构建，任何静态服务器都能跑：
@@ -271,9 +285,13 @@ npm run build
 ```
 
 产物：`dist/win-unpacked/`，里面是 **`运费大师.exe` + 相关的 dll / pak / resources 文件**。把整个 `dist/win-unpacked` 文件夹拷到任意电脑双击 `运费大师.exe` 即可运行，**免安装、不需要 Node**。
+运行时会在 exe 旁边生成 `data` 文件夹存放配置 —— **整个文件夹一起拷走，配置就跟着走**（见「[桌面版的数据放在哪](#桌面版的数据放在哪便携模式)」）。
 
 - `npm run build:installer` 额外生成 NSIS 安装包（`dist/运费大师 Setup x.y.z.exe`），需要下载 NSIS 组件
-- 主进程是 `electron/main.cjs`：它会在 `127.0.0.1` 上起一个临时静态服务再加载页面 —— **不能直接用 `file://` 打开**，因为 Chromium 在 `file://`（不透明源）下会禁用 `localStorage`，而配置全存在 `localStorage` 里
+- **页面固定跑在 `app://freight-master` 这个源下**（`electron/main.cjs` 用自定义协议直接读本地文件），不再依赖端口：
+  - 不用 `file://`：Chromium 对 `file://`（不透明源）禁用 `localStorage`
+  - 也不用 `http://127.0.0.1:<随机端口>`：`localStorage` 是按「协议 + 主机 + 端口」存的，端口每次启动都变 = 源每次都变 = **上次保存的配置读不到（看起来像数据丢失）**
+  - 如果 `app://` 注册失败，才回退到本地 HTTP 服务，且端口固定（默认 45731，被占用才顺延，并把用到的端口记在 `userData/local-server-port`），同样是为了让源保持稳定
 - 打包配置写在 `package.json` 的 `build` 字段；`win.signAndEditExecutable` 设为 `false`，这样**不需要管理员权限或开发者模式**也能打包（代价是 exe 内部版本信息保留 Electron 默认值，窗口标题与程序名仍是「运费大师」）
 - 想改 exe 的图标 / 版本信息：给 `build.win` 加 `"icon": "build/icon.ico"`，并把 `signAndEditExecutable` 改回 `true`（此时需要以管理员身份运行，或在系统里开启「开发者模式」）
 - 页面里**不使用 `window.prompt` / `window.confirm` / `window.alert`**（Electron 里不支持，会直接报错）；所有询问都用页面内自绘的通用弹窗（确认 / 输入阶梯列数 / 未保存改动三选一），网页版与桌面版表现一致
