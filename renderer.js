@@ -925,30 +925,10 @@ function ruleTableHtml(group) {
   `;
 }
 
-// 组合是独立维护的列表：group.combos = [{ name, mode }]
-// 规则靠 rule_group 归属到某个组合；规则表里填名字**不会**自动建组合
-// 老数据（没有 combos 字段）从规则里推导一次并写回，保证无缝升级
-function deriveCombosFromRules(rules) {
-  const map = new Map(); // name → { name, mode, indexes }
-  rules.forEach((r, i) => {
-    const name = String(r.rule_group || '').trim();
-    if (!name) return;
-    if (!map.has(name)) {
-      map.set(name, {
-        name,
-        mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
-        indexes: [],
-        exclusive: [], // 老数据推导出来的组合互不排斥
-      });
-    }
-    map.get(name).indexes.push(i);
-  });
-  return Array.from(map.values());
-}
-
+// 组合是独立维护的列表：group.combos = [{ name, mode, indexes, exclusive }]
+// 规则靠 combos 里的 indexes 归属到某个组合；规则表里填 rule_group **不会**自动建组合
 function groupCombos(group) {
-  if (!Array.isArray(group.combos)) group.combos = deriveCombosFromRules(group.rules);
-  return group.combos;
+  return Array.isArray(group.combos) ? group.combos : [];
 }
 
 // 「不叠加取最高」独立维护一组规则下标（优先级最高，不挂在组合下）
@@ -1489,7 +1469,8 @@ groupPanels.addEventListener('click', async e => {
       let name = '新组合';
       let i = 2;
       while (usedNames.has(name)) { name = '新组合' + (i++); }
-      groupCombos(group).push({ name, mode: 'add', indexes: [], exclusive: [] });
+      if (!Array.isArray(group.combos)) group.combos = [];
+      group.combos.push({ name, mode: 'add', indexes: [], exclusive: [] });
       renderGroupPanel();
       showToast('已新增组合：填名字、选行为并勾选规则后保存');
     } else if (e.target.classList.contains('btn-delete-combo')) {

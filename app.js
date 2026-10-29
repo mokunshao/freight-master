@@ -52,12 +52,6 @@
     return g.fields ? g.fields.map(f => f.key) : [g.key];
   }
 
-  // 次级字段 → 所属主字段（迁移老格式的单字段规则）
-  function mainFieldOf(subField) {
-    const g = FIELD_GROUPS.find(x => (x.fields ? x.fields.some(f => f.key === subField) : x.key === subField));
-    return g ? g.key : null;
-  }
-
   const COMBINE_MODE_LABELS = {
     add: '叠加',
     not_stack: '不叠加',
@@ -68,7 +62,7 @@
   };
 
   // 目的地分组：mode=zip 按邮编匹配，mode=country 直接选择地区/国家
-  // 现在目的地可以自行增删改名，这份表只用于「出厂默认数据」和给老配置补默认值
+  // 现在目的地可以自行增删改名，这份表只用于「出厂默认数据」和给缺字段的目的地补默认值
   const GROUP_META = [
     { key: 'us', name: '美国', mode: 'zip', surchargeMode: 'stack', minWeightSingle: 10, minWeightPerBox: 10 },
     { key: 'eu', name: '欧洲', mode: 'country', surchargeMode: 'max', minWeightSingle: 10, minWeightPerBox: 10 },
@@ -95,6 +89,13 @@
         { rule_group: '超大件', field: 'volume', conditions: { volume: { min: 283168 } }, amount: 500, combine_mode: 'max', enabled: 1 },
         { rule_group: '超大件', field: 'weight', conditions: { weight: { min: 50 } }, amount: 500, combine_mode: 'max', enabled: 1 },
       ],
+      combos: [
+        { name: '实重', mode: 'add', indexes: [0], exclusive: [] },
+        { name: '围长', mode: 'add', indexes: [1], exclusive: [] },
+        { name: '单边', mode: 'add', indexes: [2], exclusive: [] },
+        { name: '超大件', mode: 'add', indexes: [3, 4, 5], exclusive: [] },
+      ],
+      maxRules: [3, 4, 5],
     },
     eu: {
       tiers: [10, 21, 101],
@@ -112,6 +113,12 @@
         { rule_group: '围长300', field: 'girth', conditions: { girth: { min: 300 } }, amount: 300, combine_mode: 'max', enabled: 1 },
         { rule_group: '实重30', field: 'weight', conditions: { weight: { min: 30 } }, amount: 300, combine_mode: 'max', enabled: 1 },
       ],
+      combos: [
+        { name: '围长330', mode: 'add', indexes: [0], exclusive: [] },
+        { name: '围长300', mode: 'add', indexes: [1], exclusive: [] },
+        { name: '实重30', mode: 'add', indexes: [2], exclusive: [] },
+      ],
+      maxRules: [0, 1, 2],
     },
     ca: {
       tiers: [10, 21, 101],
@@ -126,6 +133,14 @@
         { rule_group: '⑤不收货', field: 'side', conditions: { longest: { min: 151 } }, amount: 0, combine_mode: 'reject' },
         { rule_group: '⑤不收货', field: 'girth', conditions: { girth: { min: 400 } }, amount: 0, combine_mode: 'reject' },
       ],
+      combos: [
+        { name: '①实重', mode: 'add', indexes: [0], exclusive: [] },
+        { name: '②单边', mode: 'add', indexes: [1], exclusive: [] },
+        { name: '③围长', mode: 'add', indexes: [2], exclusive: [] },
+        { name: '④超大件', mode: 'add', indexes: [3, 4], exclusive: [] },
+        { name: '⑤不收货', mode: 'reject', indexes: [5, 6, 7], exclusive: [] },
+      ],
+      maxRules: [3, 4],
     },
     uk: {
       tiers: [10, 21, 101],
@@ -142,6 +157,7 @@
         { name: '②尺寸', mode: 'add', indexes: [1], exclusive: [2] },
         { name: '③围长', mode: 'add', indexes: [2], exclusive: [1] },
       ],
+      maxRules: [],
     },
     au: {
       tiers: [10, 21, 101],
@@ -154,6 +170,15 @@
         { rule_group: '单边200-299', field: 'side', conditions: { longest: { min: 200, max: 300 } }, amount: 200, combine_mode: 'add' },
         { rule_group: '木托盘提醒', field: 'weight', conditions: { weight: { min: 30 } }, amount: 0, combine_mode: 'notice' },
       ],
+      combos: [
+        { name: '计费重≥30', mode: 'add', indexes: [0], exclusive: [] },
+        { name: '计费重≥35', mode: 'add', indexes: [1], exclusive: [] },
+        { name: '计费重≥80', mode: 'add', indexes: [2], exclusive: [] },
+        { name: '单边120-199', mode: 'add', indexes: [3], exclusive: [] },
+        { name: '单边200-299', mode: 'add', indexes: [4], exclusive: [] },
+        { name: '木托盘提醒', mode: 'notice', indexes: [5], exclusive: [] },
+      ],
+      maxRules: [],
     },
   };
 
@@ -224,9 +249,8 @@
         return row;
       });
       const rules = data.rules.map(rule => ({ id: allocId(), group_key: meta.key, ...normalizeRule(rule) }));
-      // 默认数据可以直接写死组合（含「不与…叠加」关系），没写就按规则组名推导
-      const combos = Array.isArray(data.combos) ? sanitizeCombos(data.combos, rules) : deriveCombosFromRules(rules);
-      const split = splitMaxRules(rules, combos);
+      const combos = sanitizeCombos(data.combos, rules);
+      const maxRules = sanitizeMax(data.maxRules, rules);
       fresh.groups.push({
         key: meta.key,
         name: meta.name,
@@ -234,8 +258,8 @@
         surchargeMode: meta.surchargeMode,
         minWeightSingle: meta.minWeightSingle,
         minWeightPerBox: meta.minWeightPerBox,
-        combos: split.combos,
-        maxRules: split.maxRules,
+        combos,
+        maxRules,
         tiers,
         rows,
         rules,
@@ -247,12 +271,9 @@
   // 落库前把每条规则修成合法形状：主字段 + 次级字段条件 + 金额 + 行为
   // conditions = { 次级字段: { min, max } }，min 是下限（≥），max 是可留空的上限（<）
   // 次级字段全部非必填：没填的不进 conditions，一条都没填的规则不参与命中
-  // 老格式（单 field + threshold / threshold_max，含桌面版导出的配置）在这里自动迁移
   function normalizeRule(rule) {
     const raw = rule || {};
-    const main = FIELD_GROUPS.find(g => g.key === raw.field)
-      ? raw.field
-      : mainFieldOf(raw.field) || FIELD_GROUPS[0].key;
+    const main = FIELD_GROUPS.find(g => g.key === raw.field) ? raw.field : FIELD_GROUPS[0].key;
     const allowed = conditionKeysOf(main);
     const conditions = {};
 
@@ -262,10 +283,6 @@
         if (!cond || typeof cond !== 'object') return;
         conditions[key] = { min: toNum(cond.min, null), max: toNum(cond.max, null) };
       });
-    } else {
-      // 老格式：把唯一的 threshold / threshold_max 落到对应的次级字段上
-      const key = allowed.includes(raw.field) ? raw.field : allowed[0];
-      conditions[key] = { min: toNum(raw.threshold, null), max: toNum(raw.threshold_max, null) };
     }
 
     // 两个框都留空 = 该次级字段不参与判断
@@ -284,27 +301,7 @@
     };
   }
 
-  // 组合列表（[{name, mode}]）是权威来源；老数据没有这个字段时，从规则里推导一次
-  function deriveCombosFromRules(rules) {
-    const map = new Map(); // name → { name, mode, indexes }
-    (rules || []).forEach((r, i) => {
-      const name = String(r.rule_group || '').trim();
-      if (!name) return;
-      if (!map.has(name)) {
-        map.set(name, {
-          name,
-          mode: COMBINE_MODE_LABELS[r.combine_mode] ? r.combine_mode : 'add',
-          indexes: [],
-          exclusive: [], // 老数据推导出来的组合互不排斥，需要的话在页面上勾
-        });
-      }
-      map.get(name).indexes.push(i);
-    });
-    return Array.from(map.values());
-  }
-
-  // 组合自己持有成员下标；老格式（只有 name + mode）按规则组名折算一次
-  // exclusive = 本组合「不与…叠加」的其他组合下标（关系是对称的，这里补成双向）
+  // 组合自己持有「名字 + 行为 + 成员下标 + 不与…叠加」
   function sanitizeCombos(list, rules) {
     const count = (rules || []).length;
     const total = Array.isArray(list) ? list.length : 0;
@@ -312,19 +309,14 @@
     (Array.isArray(list) ? list : []).forEach((c, ci) => {
       const name = String((c && c.name) || '').trim();
       if (!name) return; // 只丢空名；同名组合是允许的（组合之间独立，按位置区分）
-      let indexes = Array.isArray(c.indexes)
-        ? c.indexes.map(i => toNum(i, -1)).filter(i => i >= 0 && i < count)
-        : null;
-      if (indexes === null) {
-        indexes = (rules || []).reduce((acc, r, i) => {
-          if (String(r.rule_group || '').trim() === name) acc.push(i);
-          return acc;
-        }, []);
-      }
+      const indexes = (Array.isArray(c.indexes) ? c.indexes : [])
+        .map(i => toNum(i, -1))
+        .filter(i => i >= 0 && i < count)
+        .sort((a, b) => a - b);
       cleaned.push({
         name,
         mode: COMBINE_MODE_LABELS[c.mode] ? c.mode : 'add',
-        indexes: Array.from(new Set(indexes)).sort((a, b) => a - b),
+        indexes: Array.from(new Set(indexes)),
         exclusive: (Array.isArray(c && c.exclusive) ? c.exclusive : [])
           .map(i => toNum(i, -1))
           .filter(i => i >= 0 && i < total && i !== ci),
@@ -348,20 +340,6 @@
     return Array.from(
       new Set((Array.isArray(list) ? list : []).map(i => toNum(i, -1)).filter(i => i >= 0 && i < count))
     ).sort((a, b) => a - b);
-  }
-
-  // 老配置里 max 写在规则 / 组合上：搬到独立的 maxRules，组合本身降级为叠加
-  function splitMaxRules(rules, combos) {
-    const max = new Set();
-    (rules || []).forEach((r, i) => {
-      if (r.combine_mode === 'max') max.add(i);
-    });
-    const cleaned = (combos || []).map(c => {
-      if (c.mode !== 'max') return c;
-      (c.indexes || []).forEach(i => max.add(i));
-      return { ...c, mode: 'add' };
-    });
-    return { combos: cleaned, maxRules: Array.from(max).sort((a, b) => a - b) };
   }
 
   // 校验 localStorage 里的数据是否还认得出来；不认得就重新播种
@@ -415,11 +393,8 @@
         const normalized = normalizeRule(r);
         return { id: toNum(r.id, 0) || allocId(), group_key: key, ...normalized };
       });
-      const combos = Array.isArray(g.combos) ? sanitizeCombos(g.combos, rules) : deriveCombosFromRules(rules);
-      // 有独立 maxRules 就直接用；老数据则从规则 / 组合上的 max 迁移过来
-      const split = Array.isArray(g.maxRules)
-        ? { combos, maxRules: sanitizeMax(g.maxRules, rules) }
-        : splitMaxRules(rules, combos);
+      const combos = sanitizeCombos(g.combos, rules);
+      const maxRules = sanitizeMax(g.maxRules, rules);
 
       const mode = g.mode === 'zip' || g.mode === 'country' ? g.mode : meta.mode || 'country';
       return {
@@ -429,8 +404,8 @@
         surchargeMode: meta.surchargeMode || 'stack',
         minWeightSingle: Math.max(0, toNum(g.minWeightSingle, meta.minWeightSingle === undefined ? 10 : meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(g.minWeightPerBox, meta.minWeightPerBox === undefined ? 10 : meta.minWeightPerBox)),
-        combos: split.combos,
-        maxRules: split.maxRules,
+        combos,
+        maxRules,
         tiers,
         rows,
         rules,
@@ -1033,7 +1008,7 @@
     return true;
   }
 
-  // ---------- 配置导出 / 导入（JSON 格式与旧桌面版完全互通） ----------
+  // ---------- 配置导出 / 导入（只认 format + version 对得上的配置） ----------
 
   function buildExportPayload() {
     return {
@@ -1088,6 +1063,12 @@
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw new Error('配置文件格式不正确');
     }
+    if (payload.format !== CONFIG_FORMAT) {
+      throw new Error('不是本项目导出的配置文件（缺少 format 标记）');
+    }
+    if (toNum(payload.version, 0) !== CONFIG_VERSION) {
+      throw new Error(`配置版本不匹配：需要 ${CONFIG_VERSION}，文件里是 ${payload.version}`);
+    }
     if (!Array.isArray(payload.groups) || !payload.groups.length) {
       throw new Error('配置文件里没有找到目的地数据（groups 为空）');
     }
@@ -1125,11 +1106,10 @@
       });
 
       const rules = (Array.isArray(item.rules) ? item.rules : []).map(r => normalizeRule(r));
-      // 老配置文件（如桌面版导出的）没有 combos，就从规则里推导
-      const combos = Array.isArray(item.combos) ? sanitizeCombos(item.combos, rules) : deriveCombosFromRules(rules);
-      const split = Array.isArray(item.maxRules)
-        ? { combos, maxRules: sanitizeMax(item.maxRules, rules) }
-        : splitMaxRules(rules, combos);
+      if (!Array.isArray(item.combos)) throw new Error(`「${name}」缺少组合配置（combos）`);
+      const combos = sanitizeCombos(item.combos, rules);
+      if (!Array.isArray(item.maxRules)) throw new Error(`「${name}」缺少「不叠加取最高」配置（maxRules）`);
+      const maxRules = sanitizeMax(item.maxRules, rules);
 
       return {
         key,
@@ -1137,15 +1117,15 @@
         mode,
         minWeightSingle: Math.max(0, toNum(item.minWeightSingle, meta.minWeightSingle === undefined ? 10 : meta.minWeightSingle)),
         minWeightPerBox: Math.max(0, toNum(item.minWeightPerBox, meta.minWeightPerBox === undefined ? 10 : meta.minWeightPerBox)),
-        combos: split.combos,
-        maxRules: split.maxRules,
+        combos,
+        maxRules,
         tiers,
         rows,
         rules,
       };
     });
 
-    // 沿用文件里的 id（与桌面版一致，单价与阶梯的对应关系不会错位）；
+    // 沿用文件里的 id（单价与阶梯的对应关系不会错位）；
     // 只有同一目的地内部出现重复阶梯 id 时才换新 id 并重映射
     const groups = plans.map(plan => {
       const seenTierIds = new Set();
