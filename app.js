@@ -93,8 +93,8 @@
         { name: '实重', mode: 'add', indexes: [0], exclusive: [] },
         { name: '围长', mode: 'add', indexes: [1], exclusive: [] },
         { name: '单边', mode: 'add', indexes: [2], exclusive: [] },
-        { name: '超大件', mode: 'add', indexes: [3, 4, 5], exclusive: [] },
       ],
+      // 超大件三条全归「不叠加取最高」，不再建组合
       maxRules: [3, 4, 5],
     },
     eu: {
@@ -113,11 +113,8 @@
         { rule_group: '围长300', field: 'girth', conditions: { girth: { min: 300 } }, amount: 300, combine_mode: 'max', enabled: 1 },
         { rule_group: '实重30', field: 'weight', conditions: { weight: { min: 30 } }, amount: 300, combine_mode: 'max', enabled: 1 },
       ],
-      combos: [
-        { name: '围长330', mode: 'add', indexes: [0], exclusive: [] },
-        { name: '围长300', mode: 'add', indexes: [1], exclusive: [] },
-        { name: '实重30', mode: 'add', indexes: [2], exclusive: [] },
-      ],
+      // 三条全归「不叠加取最高」，不建组合
+      combos: [],
       maxRules: [0, 1, 2],
     },
     ca: {
@@ -137,7 +134,7 @@
         { name: '①实重', mode: 'add', indexes: [0], exclusive: [] },
         { name: '②单边', mode: 'add', indexes: [1], exclusive: [] },
         { name: '③围长', mode: 'add', indexes: [2], exclusive: [] },
-        { name: '④超大件', mode: 'add', indexes: [3, 4], exclusive: [] },
+        // ④超大件两条归「不叠加取最高」，不建组合
         { name: '⑤不收货', mode: 'reject', indexes: [5, 6, 7], exclusive: [] },
       ],
       maxRules: [3, 4],
@@ -249,8 +246,8 @@
         return row;
       });
       const rules = data.rules.map(rule => ({ id: allocId(), group_key: meta.key, ...normalizeRule(rule) }));
-      const combos = sanitizeCombos(data.combos, rules);
       const maxRules = sanitizeMax(data.maxRules, rules);
+      const combos = dropMaxFromCombos(sanitizeCombos(data.combos, rules), maxRules);
       fresh.groups.push({
         key: meta.key,
         name: meta.name,
@@ -334,6 +331,38 @@
     return cleaned;
   }
 
+  // 已进「不叠加取最高」的规则不再挂在组合下：去掉组合里对应的勾
+  // 成员被清空后这个组合就没用了，直接删掉；本来就空的组合（刚新建还没勾规则）保留
+  // 删组合会让「不与…叠加」的组合下标整体前移，这里顺带重排
+  function dropMaxFromCombos(combos, maxRules) {
+    const list = combos || [];
+    const max = new Set(maxRules || []);
+    if (!max.size) return list;
+
+    const kept = []; // 留下来的组合在原列表里的下标（按顺序）
+    list.forEach((c, ci) => {
+      const indexes = (c.indexes || []).filter(i => !max.has(i));
+      if (indexes.length || !(c.indexes || []).length) kept.push(ci);
+    });
+    if (kept.length === list.length) {
+      return list.map(c => ({ ...c, indexes: (c.indexes || []).filter(i => !max.has(i)) }));
+    }
+
+    const remap = new Map();
+    kept.forEach((oldIdx, newIdx) => remap.set(oldIdx, newIdx));
+    return kept.map(oldIdx => {
+      const c = list[oldIdx];
+      return {
+        ...c,
+        indexes: (c.indexes || []).filter(i => !max.has(i)),
+        // 指向被删组合的互斥关系一并丢掉（另一端同样会丢，双向仍然对称）
+        exclusive: Array.from(
+          new Set((c.exclusive || []).filter(i => remap.has(i)).map(i => remap.get(i)))
+        ).sort((a, b) => a - b),
+      };
+    });
+  }
+
   // 「不叠加取最高」单独存一份规则下标：它优先级最高，不挂在组合下面
   function sanitizeMax(list, rules) {
     const count = (rules || []).length;
@@ -393,8 +422,8 @@
         const normalized = normalizeRule(r);
         return { id: toNum(r.id, 0) || allocId(), group_key: key, ...normalized };
       });
-      const combos = sanitizeCombos(g.combos, rules);
       const maxRules = sanitizeMax(g.maxRules, rules);
+      const combos = dropMaxFromCombos(sanitizeCombos(g.combos, rules), maxRules);
 
       const mode = g.mode === 'zip' || g.mode === 'country' ? g.mode : meta.mode || 'country';
       return {
@@ -1107,9 +1136,9 @@
 
       const rules = (Array.isArray(item.rules) ? item.rules : []).map(r => normalizeRule(r));
       if (!Array.isArray(item.combos)) throw new Error(`「${name}」缺少组合配置（combos）`);
-      const combos = sanitizeCombos(item.combos, rules);
       if (!Array.isArray(item.maxRules)) throw new Error(`「${name}」缺少「不叠加取最高」配置（maxRules）`);
       const maxRules = sanitizeMax(item.maxRules, rules);
+      const combos = dropMaxFromCombos(sanitizeCombos(item.combos, rules), maxRules);
 
       return {
         key,

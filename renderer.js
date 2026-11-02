@@ -1041,7 +1041,8 @@ function combinationsHtml(group) {
   const combos = buildCombos(group);
   const members = comboMemberIdx(group);
   const maxPicked = new Set(groupMaxRules(group));
-  const hasOrphans = group.rules.some((r, i) => !members.has(i));
+  // 归到「不叠加取最高」的规则也算已生效，不算未编入
+  const hasOrphans = group.rules.some((r, i) => !members.has(i) && !maxPicked.has(i));
 
   if (!group.rules.length) {
     return `
@@ -1084,7 +1085,8 @@ function combinationsHtml(group) {
     <div class="section-title">${group.name} · 规则组组合</div>
     <div class="hint"><b>一条规则 = 一个整体</b>：它的所有次级字段只占这一个复选框（#序号），满足其一就命中本条，只按本条的金额收一次。<br>
     <b>组合之间默认叠加</b>；哪两个组合不能同时收费，到下方「互斥规则」区按组合序号打勾（例如 #2 与 #3 互斥，则 #1+ #2+ #3 命中时收金额总和最大的一组）。<br>
-    组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选的规则不参与计算。</div>
+    组合用下方「+ 新增组合」创建：填名字、选行为，再勾选规则（#序号）编入。<b>各组合互不联动</b>：改 A 不会影响 B，同一条规则也可以同时属于多个组合（按各自行为分别计算）。组合名与规则表的「规则组」列同样互不联动（规则组只是规则的备注名）；没被任何组合勾选、也没勾到「不叠加取最高」的规则不参与计算。<br>
+    标注<b class="max-tag">（归取最高）</b>的规则已由下方「不叠加取最高」接管，<b>不要再勾进组合</b>——那边的优先级最高，勾了也会被忽略。</div>
     <div class="combinations">
       ${rows || '<div class="hint">还没有组合，点「+ 新增组合」创建，再勾选规则编入。</div>'}
       <div class="combo-actions">
